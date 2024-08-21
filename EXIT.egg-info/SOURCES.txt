@@ -1,3 +1,4 @@
+README.md
 setup.py
 EXIT.egg-info/PKG-INFO
 EXIT.egg-info/SOURCES.txt
