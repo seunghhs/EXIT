@@ -6,13 +6,11 @@ A PyTorch implement of Vision Transformers as described in
 
 The official jax code is released and available at https://github.com/google-research/vision_transformer
 
-MOFTransformer 
-
-- 
-- The official code is available at https://github.com/hspark1212/MOFTransformer/blob/master/moftransformer/modules/vision_transformer_3d.py
 
 Acknowledgments:
 
+* Vision Transformer code from MOFTransformer
+* The official code is available at https://github.com/hspark1212/MOFTransformer/blob/master/moftransformer/modules/vision_transformer_3d.py
 * The paper authors for releasing code and weights, thanks!
 * I fixed my class token impl based on Phil Wang's https://github.com/lucidrains/vit-pytorch ... check it out
 for some einops/einsum fun
@@ -31,7 +29,7 @@ import torch.nn as nn
 
 from einops.layers.torch import Rearrange
 
-from torch.nn import AvgPool3d
+from torch.nn import AvgPool1d, AvgPool3d
 from timm.models.layers import DropPath, trunc_normal_
 
 
@@ -64,7 +62,7 @@ class Mlp(nn.Module):
 class Attention(nn.Module):
     def __init__(
         self,
-        dim,
+        dim, 
         num_heads=8,
         qkv_bias=False,
         qk_scale=None,
@@ -155,50 +153,49 @@ class Block(nn.Module):
         return x, attn
 
 
-class PatchEmbed3D(nn.Module):
-    """Image to Patch Embedding for 3D"""
+
+class PatchEmbed1D(nn.Module):
+    """XRD to Patch Embedding for 1D"""
 
     def __init__(
         self,
-        img_size,  # minimum of H or W ex. 384
-        patch_size,  # p -> length of fixed patch ex. 32
-        in_chans=1,
-        embed_dim=768,
+        seq_length,  # sequence length  np.arange(5,50,0.01) -> 4500
+        patch_size,  # length of each patch ex. 10 or 20
+        in_chans=1,  # number of input channels (default 1 for 1D data)
+        embed_dim=768,  # dimension of the embedding space
         no_patch_embed_bias=False,
     ):
         super().__init__()
 
-        assert img_size % patch_size == 0
-        num_patches = (img_size**3) // (patch_size**3)
-        self.img_size = img_size  # default: 30
-        self.patch_size = patch_size  # default: 5
-        self.num_patches = num_patches
+        assert seq_length % patch_size == 0 #Sequence length must be divisible by patch size
+        num_patches = seq_length // patch_size
+        self.seq_length = seq_length  # sequence length ex. 4500
+        self.patch_size = patch_size  # patch size ex.10 or 20
+        self.num_patches = num_patches  
 
         self.proj = nn.Sequential(
             Rearrange(
-                "b c (h p1) (w p2) (d p3) -> b (h w d) (p1 p2 p3 c)",
-                p1=patch_size,
-                p2=patch_size,
-                p3=patch_size,
+                "b c (l p) -> b l (p c)",  
+                p=patch_size
             ),
-            nn.Linear(patch_size * patch_size * patch_size * in_chans, embed_dim),
+            nn.Linear(patch_size * in_chans, embed_dim) 
         )
 
     def forward(self, x):
-        x = self.proj(x)  # [B, num_patches,
-        return x  # [B, emb_dim, px, ph, pd]
+        x = self.proj(x)  # [B, num_patches, embed_dim]
+        return x  # output: [B, num_patches, embed_dim]
 
 
-class VisionTransformer3D(nn.Module):
-    """Vision Transformer
 
+class VisionTransformer1D(nn.Module):
+    """ Vision Transformer for 1D Data
     A PyTorch impl of : `An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale`  -
-        https://arxiv.org/abs/2010.11929
+        https://arxiv.org/abs/2010.11929    
     """
 
     def __init__(
         self,
-        img_size,
+        seq_length,
         patch_size,
         in_chans,
         embed_dim,
@@ -213,8 +210,8 @@ class VisionTransformer3D(nn.Module):
         norm_layer=None,
         add_norm_before_transformer=False,
         mpp_ratio=0.15,
-        config=None,
     ):
+        
         """
         Args:
             img_size (int, tuple): input image size
@@ -231,7 +228,8 @@ class VisionTransformer3D(nn.Module):
             drop_path_rate (float): stochastic depth rate
             hybrid_backbone (nn.Module): CNN backbone to use in-place of PatchEmbed module
             norm_layer: (nn.Module): normalization layer
-        """
+        """     
+        
         super().__init__()
 
         self.in_chans = in_chans
@@ -240,16 +238,15 @@ class VisionTransformer3D(nn.Module):
         norm_layer = norm_layer or partial(nn.LayerNorm, eps=1e-6)
         self.add_norm_before_transformer = add_norm_before_transformer
 
-        self.patch_embed = PatchEmbed3D(
-            img_size=img_size,
+        self.patch_embed = PatchEmbed1D(
+            seq_length=seq_length,
             patch_size=patch_size,
             in_chans=in_chans,
             embed_dim=embed_dim,
         )
         num_patches = self.patch_embed.num_patches
 
-        self.patch_size = patch_size  # default = 32
-        self.patch_dim = img_size // patch_size
+        self.patch_size = patch_size
         self.mask_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
@@ -260,7 +257,7 @@ class VisionTransformer3D(nn.Module):
 
         dpr = [
             x.item() for x in torch.linspace(0, drop_path_rate, depth)
-        ]  # stochastic depth decay rule
+        ]
         self.blocks = nn.ModuleList(
             [
                 Block(
@@ -293,75 +290,37 @@ class VisionTransformer3D(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def mask_tokens(self, orig_image, feats, patch_size, mpp_ratio):
+    def mask_tokens(self, orig_seq, feats, patch_size, mpp_ratio):
         """
         Prepare masked tokens inputs/labels for masked patch prediction: 80% MASK, 10% random, 10% original.
-        :param orig_image = _x, Tensor [B, C, H, W, D]
-        :param feats = x  Tensor [B, ph*pw*pd, emb_dim]
-
-        :return feats [B, ph*pw, emb_dim], labels [B, ph*pw, C]
-
         """
-
-        m = AvgPool3d(patch_size, patch_size)
+        avgpool = AvgPool1d(patch_size)
         with torch.no_grad():
-            img_patch = m(orig_image)
-
-        labels = (
-            (img_patch.long().flatten(start_dim=2, end_dim=4))  # [B, C, ph*pw*pd]
-            .permute(0, 2, 1)
-            .contiguous()
-        )  # [B, ph*pw*pd, C]
-
-        # We sample a few tokens in each sequence for MLM training (with probability `self.mlm_probability`)
-        # probability_matrix = torch.full(labels.shape[:-1], 0.15)  # [B, ph*pw*pd]
-        probability_matrix = torch.full(labels.shape[:-1], mpp_ratio)  # [B, ph*pw*pd]
+            seq_patch = avgpool(orig_seq)
+        
+        labels = seq_patch.permute(0, 2, 1).contiguous()
+        
+        
+        
+        probability_matrix = torch.full(labels.shape[:-1], mpp_ratio)
         masked_indices = torch.bernoulli(probability_matrix).bool()
-        labels[
-            ~masked_indices
-        ] = -100  # We only compute loss on masked tokens [B, ph*pw*pd, C]
-        """
-        # 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
-        indices_replaced = (
-                torch.bernoulli(torch.full(labels.shape[:-1], 0.8)).bool() & masked_indices
-        )  # [B, ph*pw*pd]
+        labels[~masked_indices] = -100 
 
-        feats[indices_replaced] = self.mask_token.to(feats)
-        """
         return feats, labels
 
-    def visual_embed(self, _x, max_image_len, mask_it=False):
-        """
+    def forward(self, x, mask_it=False):
+        B, _, _ = x.shape
+        x = self.patch_embed(x)  # [B, num_patches, embed_dim]
 
-        :param _x: batch images, Tensor [B, C, H, W, D]
-        :param max_image_len: Int (or -1)
-        :param mask_it: Bool
-        :return:
-            x:  Tensor [B, max_image_len+1, hid_dim],
-            x_mask: Tensor [B, max_image_len+1]],
-            (patch_index, (H, W, D)): [[B, max_image_len+1, 3], [H, W, D]]
-            label: [B, max_image_len+1, C]
-        """
-
-        B, _, _, _, _ = _x.shape
-        x = self.patch_embed(_x)  # [B, ph*pw*pd, embed_dim]
-        # x = x.flatten(2).transpose(1, 2)
-
-        # mpp
         if mask_it:
-            x, label = self.mask_tokens(
-                _x, x, self.patch_size, self.mpp_ratio
-            )  # [B, ph*pw*pd, emb_dim], [B, ph*pw*pd, C]
+            x, label = self.mask_tokens(x, x, self.patch_size, self.mpp_ratio)
             label = torch.cat(
                 [torch.full((label.shape[0], 1, self.in_chans), -100).to(label), label],
                 dim=1,
-            )  # [B, max_len+1, C]
+            )
 
-        # cls tokens
-        cls_token = self.cls_token.expand(B, -1, -1)  # [B, 1, embed_dim]
-        x = torch.cat([cls_token, x], dim=1)  # [B, ph*pw*pd, embed_dim]
-
-        # positional embedding
+        cls_token = self.cls_token.expand(B, -1, -1)
+        x = torch.cat([cls_token, x], dim=1)
         x += self.pos_embed
         x = self.pos_drop(x)
 
@@ -374,3 +333,5 @@ class VisionTransformer3D(nn.Module):
             return x, x_mask, label
         else:
             return x, x_mask, None
+
+

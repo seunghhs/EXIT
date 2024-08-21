@@ -35,7 +35,9 @@ class Dataset(Dataset):
         
 
         self.xrd, self.sa, self.pv, self.mofid, self.name, self.ref =\
-        zip(*[(item['xrd'], item['sa'], item['pv'], item['mofid'], item['name'], item['ref']) for item in data_list])
+        zip(*[(np.expand_dims(item['xrd'], axis=0), item['sa'], item['pv'], item['mofid'], item['name'], item['ref']) for item in data_list])
+
+        
         self.tokens = self.get_tokens(self.mofid)
            
 
