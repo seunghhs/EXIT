@@ -1,0 +1,18 @@
+dataset:
+    train_data_dir:
+
+model:
+    seq_length : 4500,
+    patch_size : 10,
+    in_chans : 1,
+    embed_dim : 768,
+    hidden_dim: 768,
+
+
+loss_names:
+    sa: 1
+    pv: 1
+    mofid: 1
+    regression: 0
+    classification: 0
+    
