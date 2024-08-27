@@ -15,4 +15,8 @@ loss_names:
     mofid: 1
     regression: 0
     classification: 0
-    
+
+
+model_path:
+visualize: False
+test: False

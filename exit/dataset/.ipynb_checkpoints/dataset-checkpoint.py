@@ -47,9 +47,9 @@ class Dataset(Dataset):
         return len(self.xrd)
 
     def __getitem__(self, index):
-        ret = dict()
+        results = dict()
 
-        ret.update(
+        results.update(
             {
                 "xrd": self.xrd[index],
                 "sa": self.sa[index],
@@ -60,15 +60,15 @@ class Dataset(Dataset):
 
             }
         )
-        #ret.update(self.tokens[index])
+        #results.update(self.tokens[index])
 
 
-        return ret
+        return results
 
     def get_tokens(self, mofid):
-
+##################################################
         ################## jw token #### 
         # self.tokens <- mofid        
         pass
-
+##################################################
 

@@ -46,13 +46,14 @@ class SAHead(nn.Module):
         x = self.fc(x)
         return x
 
-
+##################################################
 class MOFidHead(nn.Module):
     """
     head for MOFid (Masked Patch Prediction)
     JW.....
     """
     pass
+##################################################
 
 class RegressionHead(nn.Module):
     """
