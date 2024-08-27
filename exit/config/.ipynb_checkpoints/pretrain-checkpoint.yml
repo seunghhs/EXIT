@@ -17,6 +17,13 @@ loss_names:
     classification: 0
 
 
+
 model_path:
 visualize: False
 test: False
+
+
+pv_mean:
+pv_std:
+sa_mean:
+sa_std:
