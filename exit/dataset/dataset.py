@@ -3,26 +3,22 @@ import pickle
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+from exit.tokenizer.mof_tokenizer import MOFTokenizer
 
+tokenizer = MOFTokenizer(model_max_length = 512, padding_side='right')
 
-class Dataset(Dataset):
+class Basic_Dataset(Dataset):
     def __init__(
         self,
         data_dir: str,
-
-
     ):
         """
         Dataset for pretrained MOF.
         Args:
             data_dir (str): where data_dir(.pkl) for xrd, sa (surface area), pv (pore volume), and mofid ; 
-
         """
         super().__init__()
         self.data_dir = data_dir
-        # self.task = task
-        # assert task in {'pretrain', 'finetuning'}
-
         print(f"read {self.data_dir}...")
 
         if not os.path.isfile(self.data_dir):
@@ -32,23 +28,15 @@ class Dataset(Dataset):
 
         with open(self.data_dir, "rb") as h:
             data_list = pickle.load(h)
-        
-
         self.xrd, self.sa, self.pv, self.mofid, self.name, self.ref =\
         zip(*[(np.expand_dims(item['xrd'], axis=0), item['sa'], item['pv'], item['mofid'], item['name'], item['ref']) for item in data_list])
-
-        
         self.tokens = self.get_tokens(self.mofid)
            
-
-
-
     def __len__(self):
         return len(self.xrd)
 
     def __getitem__(self, index):
         results = dict()
-
         results.update(
             {
                 "xrd": self.xrd[index],
@@ -56,19 +44,50 @@ class Dataset(Dataset):
                 "pv": self.pv[index],
                 "mofid": self.mofid[index],
                 "name": self.name[index],
-                "ref": self.ref[index]
+                "ref": self.ref[index],
+                "tokens" : self.tokens[index]
 
             }
         )
         #results.update(self.tokens[index])
-
-
         return results
-
+    
     def get_tokens(self, mofid):
-##################################################
-        ################## jw token #### 
-        # self.tokens <- mofid        
-        pass
-##################################################
+        token =  np.array([tokenizer.encode(i, max_length=512, truncation=True,padding='max_length') for i in mofid])
+        return token
 
+class MOF_pretrain_Dataset(Dataset):
+    def __init__(
+        self,
+        data_dir: str,
+    ):
+        """
+        Dataset for pretrained MOF.
+        Args:
+            data_dir (str): where data_dir(.pkl) for xrd, sa (surface area), pv (pore volume), and mofid ; 
+        """
+        super().__init__()
+        self.data_dir = data_dir
+        print(f"read {self.data_dir}...")
+
+        if not os.path.isfile(self.data_dir):
+            raise FileNotFoundError(
+                f"{self.data_dir} doesn't exist"
+            )
+
+        with open(self.data_dir, "rb") as h:
+            data_list = pickle.load(h)
+        self.xrd, self.sa, self.pv, self.mofid, self.name, self.ref =\
+        zip(*[(np.expand_dims(item['xrd'], axis=0), item['sa'], item['pv'], item['mofid'], item['name'], item['ref']) for item in data_list])
+        self.tokens = self.get_tokens(self.mofid)
+           
+    def __len__(self):
+        return len(self.xrd)
+
+    def __getitem__(self, index):
+        X = torch.from_numpy(np.asarray(self.tokens[index]))
+        return X.type(torch.LongTensor)
+    
+    def get_tokens(self, mofid):
+        token =  np.array([tokenizer.encode(i, max_length=512, truncation=True,padding='max_length') for i in mofid])
+        return token

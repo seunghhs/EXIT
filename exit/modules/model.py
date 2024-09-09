@@ -97,7 +97,6 @@ class MultiModal(LightningModule):
 ##################################################
         # mofid transformer (JW)
         mfoid_embeds, mofid_masks, mofid_labels = None, None, None
-        # mofid_embeds,  mofid_masks, mofid_labels = 
 ##################################################
         
         # class tokens
