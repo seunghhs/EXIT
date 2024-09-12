@@ -21,7 +21,20 @@ def init_weights(module):
     if isinstance(module, nn.Linear) and module.bias is not None:
         module.bias.data.zero_()
 
-##########
+def set_metrics(pl_module):
+    for split in ["train", "val"]:
+        for k, v in pl_module.hparams.config["loss_names"].items():
+            if v < 1:
+                continue
+            if k in ['regression', 'pv', 'sa', ]:
+                setattr(pl_module, f"{split}_{k}_loss", Scalar())
+                setattr(pl_module, f"{split}_{k}_mae", Scalar())
+            else:
+                setattr(pl_module, f"{split}_{k}_accuracy", Accuracy())
+                setattr(pl_module, f"{split}_{k}_loss", Scalar())
+
+                
+#===================== loss =====================
 def compute_pv_loss(module, results, normalizer):
     logits = module.pv_head(results['cls_feats'])
     labels = torch.FloatTensor(results['pv']).to(logits.device)
@@ -55,7 +68,6 @@ def compute_pv_loss(module, results, normalizer):
 
 
 
-
 def compute_sa_loss(module, results, normalizer):
     logits = module.sa_head(results['cls_feats'])
     labels = torch.FloatTensor(results['sa']).to(logits.device)
@@ -86,6 +98,49 @@ def compute_sa_loss(module, results, normalizer):
         module.log(f"sa/{phase}/mae", mae, sync_dist=True)    
 
     return results
+
+            'mofid_feats': mofid_feats,
+            'mofid_masks': mofid_masks,
+            'mofid_labels': mofid_labels,
+
+
+def compute_mofid_loss(module, results):
+    infer = module.infer(batch)
+
+    logits = module.mofid_head(
+        infer["cls_feats"]
+    )  # [B, output_dim]
+    
+    masks = torch.LongTensor(results['mofid_masks']).to(logits.device)
+    labels = torch.LongTensor(results["mofid_labels"]).to(logits.device)  # [B]
+    
+
+    loss = F.cross_entropy(logits[masks], labels[masks])
+
+    results = {
+        "mofid_loss": loss,
+        "mofid_logits": logits[masks],
+        "mofid_labels": labels[masks],
+    }
+
+    # call update() loss and acc
+    phase = "train" if module.training else "val"
+    loss = getattr(module, f"{phase}_mofid_loss")(
+        results["mofid_loss"]
+    )                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   
+    acc = getattr(module, f"{phase}_mofid_accuracy")(
+        results["mofid_logits"], results["mofid_labels"]
+    )
+
+    if module.write_log:
+        module.log(f"mofid/{phase}/loss", loss, sync_dist=True)
+        module.log(f"mofid/{phase}/accuracy", acc, sync_dist=True)
+
+    return ret
+
+
+
+
 
 def compute_regression_loss(module, results, normalizer):
     logits = module.regression_head(results['cls_feats'])
@@ -143,7 +198,7 @@ def compute_classification_loss(module, results):
     phase = "train" if module.training else "val"
     loss = getattr(module, f"{phase}_classification_loss")(
         results["classification_loss"]
-    )
+    )                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   
     acc = getattr(module, f"{phase}_classification_accuracy")(
         results["classification_logits"], results["classification_labels"]
     )
@@ -153,6 +208,58 @@ def compute_classification_loss(module, results):
         module.log(f"classification/{phase}/accuracy", acc, sync_dist=True)
 
     return ret
+#===================== loss =====================
+
+def epoch_wrapup(pl_module):
+    phase = "train" if pl_module.training else "val"
+
+    the_metric = 0
+
+    for loss_name, v in pl_module.hparams.config["loss_names"].items():
+        if v < 1:
+            continue
+
+        if loss_name in ["regression" , 'pv', 'sa', ]:
+            # mse loss
+            pl_module.log(
+                f"{loss_name}/{phase}/loss_epoch",
+                getattr(pl_module, f"{phase}_{loss_name}_loss").compute(),
+                batch_size=pl_module.hparams["config"]["per_gpu_batchsize"],
+                sync_dist=True,
+            )
+            getattr(pl_module, f"{phase}_{loss_name}_loss").reset()
+            # mae loss
+            value = getattr(pl_module, f"{phase}_{loss_name}_mae").compute()
+            pl_module.log(
+                f"{loss_name}/{phase}/mae_epoch",
+                value,
+                batch_size=pl_module.hparams["config"]["per_gpu_batchsize"],
+                sync_dist=True,
+            )
+            getattr(pl_module, f"{phase}_{loss_name}_mae").reset()
+
+            value = -value
+        else:
+            value = getattr(pl_module, f"{phase}_{loss_name}_accuracy").compute()
+            pl_module.log(
+                f"{loss_name}/{phase}/accuracy_epoch",
+                value,
+                batch_size=pl_module.hparams["config"]["per_gpu_batchsize"],
+                sync_dist=True,
+            )
+            getattr(pl_module, f"{phase}_{loss_name}_accuracy").reset()
+            pl_module.log(
+                f"{loss_name}/{phase}/loss_epoch",
+                getattr(pl_module, f"{phase}_{loss_name}_loss").compute(),
+                batch_size=pl_module.hparams["config"]["per_gpu_batchsize"],
+                sync_dist=True,
+            )
+            getattr(pl_module, f"{phase}_{loss_name}_loss").reset()
+
+        the_metric += value
+
+    pl_module.log(f"{phase}/the_metric", the_metric, sync_dist=True)
+
 
 
 def set_schedule(module):
@@ -298,3 +405,35 @@ class Normalizer(object):
 
     def decode(self, tensor):
         return self._denorm_func(tensor)
+    
+    
+
+
+
+###################################
+#############masking###############
+###################################
+def prob_mask_like(t, prob): #t: tensor
+    return torch.zeros_like(t).float().uniform_(0, 1) < prob
+
+def mask_with_tokens(t, token_ids): #t: tensor
+    init_no_mask = torch.full_like(t, False, dtype=torch.bool)
+    mask = reduce(lambda acc, el: acc | (t == el), token_ids, init_no_mask)
+    return mask
+
+def get_mask_subset_with_prob(mask, prob):
+    batch, seq_len, device = *mask.shape, mask.device
+    max_masked = math.ceil(prob * seq_len)
+
+    num_tokens = mask.sum(dim=-1, keepdim=True)
+    mask_excess = (mask.cumsum(dim=-1) > (num_tokens * prob).ceil())
+    mask_excess = mask_excess[:, :max_masked]
+
+    rand = torch.rand((batch, seq_len), device=device).masked_fill(~mask, -1e9)
+    _, sampled_indices = rand.topk(max_masked, dim=-1)
+    sampled_indices = (sampled_indices + 1).masked_fill_(mask_excess, 0)
+
+    new_mask = torch.zeros((batch, seq_len + 1), device=device)
+    new_mask.scatter_(-1, sampled_indices, 1)
+    return new_mask[:, 1:].bool()
+

@@ -7,8 +7,9 @@ from pytorch_lightning import LightningModule
 
 from exit.modules import heads
 from exit.modules.visiontransformer import VisionTransformer1D
+from exit.modules.mofidtransformer import MaskingGenerator, MOFidEncoder
 from exit.modules.utils import Normalizer, init_weights
-from exit.modules.utils import compute_pv_loss, compute_sa_loss,compute_regression_loss, compute_classification_loss
+from exit.modules.utils import compute_pv_loss, compute_sa_loss,compute_regression_loss, compute_classification_loss, epoch_wrapup, set_schedule, set_metrics
 
 
 
@@ -34,10 +35,17 @@ class MultiModal(LightningModule):
         self.exclude_keys = ['xrd', 'ref', 'name']
         self.current_tasks = []
         self.write_log = True
-        ##################################################
-        # set mofid transformer (JW)
-        self.mofid_transformer = None
-        ##################################################
+        self.vis = False
+
+        # mofid
+        self.mofid_masking = MaskingGenerator()
+        self.mofid_encoder = MOFidEncoder(ntoken = config['model']['ntoken'],
+            d_model = config['model']['d_model'] , 
+            nhead = config['model']['nhead'], 
+            d_hid = config['model']['d_hid'],
+            nlayers = config['model']['nlayers'])
+
+
         
         # class token
         self.cls_embeddings = nn.Linear(1, self.hidden_dim)
@@ -51,7 +59,8 @@ class MultiModal(LightningModule):
         self.pooler = heads.Pooler(self.hidden_dim)
         self.pooler.apply(init_weights)
 
-
+        set_metrics(self)
+        
         # ===================== loss =====================
         if config["loss_names"]["pv"] > 0:
             self.pv_head = heads.PVHead(self.hidden_dim)
@@ -93,24 +102,24 @@ class MultiModal(LightningModule):
     def forward(self, batch):
         B = len(batch['xrd'])
 
+        #mofid encoding
+        mofid_embeds, mofid_masks, mofid_labels = self.mofid_masking(batch['tokens'])
+        mofid_embeds = self.mofid_encoder(mofid_embeds)
         
-##################################################
-        # mofid transformer (JW)
-        mfoid_embeds, mofid_masks, mofid_labels = None, None, None
-##################################################
+
         
         # class tokens
-        cls_tokens = torch.zeros(B).to(graph_embeds)  # [B]
+        cls_tokens = torch.zeros(B).to(mofid_embeds)  # [B]
         cls_embeds = self.cls_embeddings(cls_tokens[:, None, None])  # [B, 1, hid_dim]
-        cls_mask = torch.ones(B, 1).to(graph_masks)  # [B, 1]
+        cls_mask = torch.ones(B, 1).to(mofid_masks)  # [B, 1]
 
         # class tokens + mofid_tokens
         mofid_embeds = torch.cat([cls_embeds, mofid_embeds], dim=1 )
         mofid_masks = torch.cat([cls_mask, mofid_masks], dim=1)
 
         
-        # vision transformer (xrd)
-        xrd_embeds, xrd_masks, xrd_labels = self.vision_transformer(batch['xrd'] )
+        # vision transformer encoding (xrd)
+        xrd_embeds, xrd_masks, xrd_labels = self.vision_transformer(batch['xrd'].float() )
 
         # add token_type_embedding (mofid ->0, xrd->1)
         mofid_embeds = mofid_embeds + self.token_type_embeddings(
@@ -146,6 +155,7 @@ class MultiModal(LightningModule):
             'raw_cls_feats': x[:, 0],
             'mofid_feats': mofid_feats,
             'mofid_masks': mofid_masks,
+            'mofid_labels': mofid_labels,
             'xrd_feats': xrd_feats,
             'xrd_masks': xrd_masks,
             'xrd_labels': xrd_labels,
@@ -173,11 +183,9 @@ class MultiModal(LightningModule):
             normalizer = Normalizer(self.sa_mean, self.sa_std, self.device)
             losses.update(compute_sa_loss(self, results, normalizer))
 
-##################################################
-        # mofid loss JW
+
         if 'mofid' in self.current_tasks:
-            pass
-##################################################
+            losses.update(compute_mofid_loss(self, results))
 
         
         if 'regression' in self.current_tasks:
@@ -192,4 +200,100 @@ class MultiModal(LightningModule):
 
     def training_step(self, batch, batch_idx):
         output = self(batch)
-        #total_loss = 
+        loss_dict = self.get_loss(output)
+        total_loss = sum([v for k, v in loss_dict.items() if "loss" in k])
+        return total_loss
+
+    def on_train_epoch_end(self):
+        epoch_wrapup(self)
+
+    def validation_step(self, batch, batch_idx):
+        output = self(batch)
+        loss_dict = self.get_loss(output)
+        total_loss = sum([v for k, v in loss_dict.items() if "loss" in k])
+        return total_loss
+         
+    def on_validation_epoch_end(self) -> None:
+        epoch_wrapup(self) 
+
+
+    def test_step(self, batch, batch_idx):
+        output = self(batch)
+        loss_dict = self.get_loss(output)
+        
+        output = {
+            k: (v.cpu() if torch.is_tensor(v) else v) for k, v in loss_dict.items()
+        }  # update cpu for memory
+
+        if "regression_logits" in output.keys():
+            self.test_logits += output["regression_logits"].tolist()
+            self.test_labels += output["regression_labels"].tolist()
+        return output
+
+    def on_test_epoch_end(self):
+        module_utils.epoch_wrapup(self)
+
+        # calculate r2 score when regression
+        if len(self.test_logits) > 1:
+            r2 = r2_score(np.array(self.test_labels), np.array(self.test_logits))
+            self.log(f"test/r2_score", r2, sync_dist=True)
+            self.test_labels.clear()
+            self.test_logits.clear()
+
+
+    def configure_optimizers(self):
+        return set_schedule(self)
+
+
+    def on_predict_start(self):
+        self.write_log = False
+        module_utils.set_task(self)
+
+    def predict_step(self, batch, batch_idx, dataloader_idx=0):
+        output = self(batch)
+
+        if "classification_logits" in output:
+            if self.hparams.config["n_classes"] == 2:
+                output["classification_logits_index"] = torch.round(
+                    output["classification_logits"]
+                ).to(torch.int)
+            else:
+                softmax = torch.nn.Softmax(dim=1)
+                output["classification_logits"] = softmax(
+                    output["classification_logits"]
+                )
+                output["classification_logits_index"] = torch.argmax(
+                    output["classification_logits"], dim=1
+                )
+
+        output = {
+            k: (v.cpu().tolist() if torch.is_tensor(v) else v)
+            for k, v in output.items()
+            if ("logits" in k) or ("labels" in k) 
+        }
+
+        return output
+
+    def on_predict_epoch_end(self, *args):
+        self.test_labels.clear()
+        self.test_logits.clear()
+
+    def on_predict_end(
+        self,
+    ):
+        self.write_log = True
+
+    def lr_scheduler_step(self, scheduler, *args):
+        if len(args) == 2:
+            optimizer_idx, metric = args
+        elif len(args) == 1:
+            (metric,) = args
+        else:
+            raise ValueError(
+                "lr_scheduler_step must have metric and optimizer_idx(optional)"
+            )
+
+        if pl.__version__ >= "2.0.0":
+            scheduler.step(epoch=self.current_epoch)
+        else:
+            scheduler.step()

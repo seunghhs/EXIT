@@ -1,12 +1,20 @@
 dataset:
     train_data_dir:
 
+
+
+
 model:
-    seq_length : 4500,
-    patch_size : 10,
-    in_chans : 1,
-    embed_dim : 768,
-    hidden_dim: 768,
+    seq_length : 4500
+    patch_size : 10
+    in_chans : 1
+    embed_dim : 768
+    hidden_dim: 768
+    ntoken: 4021
+    d_model: 768
+    nhead: 8
+    d_hid: 512
+    nlayers: 6
 
 
 loss_names:
@@ -21,7 +29,7 @@ loss_names:
 model_path:
 visualize: False
 test: False
-
+per_gpu_batchsize: 8
 
 pv_mean:
 pv_std:
