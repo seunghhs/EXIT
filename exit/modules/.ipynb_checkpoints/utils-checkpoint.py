@@ -9,7 +9,7 @@ from transformers import (
     get_constant_schedule,
     get_constant_schedule_with_warmup,
 )
-
+from exit.modules.metrics import Accuracy, Scalar
 
 def init_weights(module):
     if isinstance(module, (nn.Linear, nn.Embedding)):
@@ -37,7 +37,7 @@ def set_metrics(pl_module):
 #===================== loss =====================
 def compute_pv_loss(module, results, normalizer):
     logits = module.pv_head(results['cls_feats'])
-    labels = torch.FloatTensor(results['pv']).to(logits.device)
+    labels = (results['pv']).to(logits.device)
 
      # normalize encode if config["mean"] and config["std], else pass
     logits = logits.squeeze(-1)
@@ -70,7 +70,7 @@ def compute_pv_loss(module, results, normalizer):
 
 def compute_sa_loss(module, results, normalizer):
     logits = module.sa_head(results['cls_feats'])
-    labels = torch.FloatTensor(results['sa']).to(logits.device)
+    labels = (results['sa']).to(logits.device)
 
      # normalize encode if config["mean"] and config["std], else pass
     logits = logits.squeeze(-1)
@@ -99,20 +99,18 @@ def compute_sa_loss(module, results, normalizer):
 
     return results
 
-            'mofid_feats': mofid_feats,
-            'mofid_masks': mofid_masks,
-            'mofid_labels': mofid_labels,
+
 
 
 def compute_mofid_loss(module, results):
-    infer = module.infer(batch)
+
 
     logits = module.mofid_head(
-        infer["cls_feats"]
+        results["mofid_feats"]
     )  # [B, output_dim]
     
-    masks = torch.LongTensor(results['mofid_masks']).to(logits.device)
-    labels = torch.LongTensor(results["mofid_labels"]).to(logits.device)  # [B]
+    masks = (results['mofid_masks']).to(logits.device)
+    labels = (results["mofid_labels"]).to(logits.device)  # [B]
     
 
     loss = F.cross_entropy(logits[masks], labels[masks])
@@ -136,7 +134,7 @@ def compute_mofid_loss(module, results):
         module.log(f"mofid/{phase}/loss", loss, sync_dist=True)
         module.log(f"mofid/{phase}/accuracy", acc, sync_dist=True)
 
-    return ret
+    return results
 
 
 
@@ -144,7 +142,7 @@ def compute_mofid_loss(module, results):
 
 def compute_regression_loss(module, results, normalizer):
     logits = module.regression_head(results['cls_feats'])
-    labels = torch.FloatTensor(results['regression']).to(logits.device)
+    labels = (results['regression']).to(logits.device)
 
      # normalize encode if config["mean"] and config["std], else pass
     logits = logits.squeeze(-1)

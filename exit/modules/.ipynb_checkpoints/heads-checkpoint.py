@@ -46,25 +46,25 @@ class SAHead(nn.Module):
         x = self.fc(x)
         return x
 
-##################################################
+
 class MOFidHead(nn.Module):
     """
     head for MOFid (Masked Patch Prediction)
     """
-    def __init__(self, hid_dim):
+    def __init__(self, hid_dim, ntoken):
         super().__init__()
 
         bert_config = BertConfig(
             hidden_size=hid_dim,
         )
         self.transform = BertPredictionHeadTransform(bert_config)
-        self.decoder = nn.Linear(hid_dim, 512)  # bins
+        self.decoder = nn.Linear(hid_dim, ntoken )  # bins
 
     def forward(self, x):  # [B, max_len, hid_dim]
         x = self.transform(x)  # [B, max_len, hid_dim]
         x = self.decoder(x)  # [B, max_len, bins]
         return x
-##################################################
+
 
 class RegressionHead(nn.Module):
     """

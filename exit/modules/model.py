@@ -7,9 +7,10 @@ from pytorch_lightning import LightningModule
 
 from exit.modules import heads
 from exit.modules.visiontransformer import VisionTransformer1D
-from exit.modules.mofidtransformer import MaskingGenerator, MOFidEncoder
+from exit.modules.mofidtransformer import  MOFidEncoder
 from exit.modules.utils import Normalizer, init_weights
-from exit.modules.utils import compute_pv_loss, compute_sa_loss,compute_regression_loss, compute_classification_loss, epoch_wrapup, set_schedule, set_metrics
+from exit.modules.utils import compute_pv_loss, compute_sa_loss,compute_regression_loss, compute_classification_loss, compute_mofid_loss
+from exit.modules.utils import epoch_wrapup, set_schedule, set_metrics
 
 
 
@@ -29,7 +30,8 @@ class MultiModal(LightningModule):
         in_chans = config['model']['in_chans'],
         embed_dim = config['model']['embed_dim'],               
         )
-
+        
+        self.ntoken = config['model']['ntoken']
         self.visualize = config['visualize']
         self.hidden_dim = config['model']['hidden_dim']
         self.exclude_keys = ['xrd', 'ref', 'name']
@@ -38,7 +40,7 @@ class MultiModal(LightningModule):
         self.vis = False
 
         # mofid
-        self.mofid_masking = MaskingGenerator()
+
         self.mofid_encoder = MOFidEncoder(ntoken = config['model']['ntoken'],
             d_model = config['model']['d_model'] , 
             nhead = config['model']['nhead'], 
@@ -77,7 +79,7 @@ class MultiModal(LightningModule):
             self.sa_std = config['sa_std']            
 
         if config["loss_names"]["mofid"] > 0:
-            self.mofid_head = heads.MOFidHead(self.hidden_dim)
+            self.mofid_head = heads.MOFidHead(self.hidden_dim, self.ntoken)
             self.mofid_head.apply(init_weights)
             self.current_tasks.append('mofid')
             
@@ -98,56 +100,62 @@ class MultiModal(LightningModule):
         # if config['model_path'] is not None:
         #     ckpt = torch.load(config['model_path'])
 
-    
-    def forward(self, batch):
-        B = len(batch['xrd'])
+        self.test_logits = []
+        self.test_labels = []
 
+    def forward(self, batch):
+        B = len(batch['xrd'].to(self.device))
+        
         #mofid encoding
-        mofid_embeds, mofid_masks, mofid_labels = self.mofid_masking(batch['tokens'])
+        mofid_embeds,  mofid_labels = batch['input_ids'].to(self.device), batch['labels'].to(self.device)
+        mofid_attention_masks = batch['attention_mask'].to(self.device)
+        mofid_masks = mofid_labels != -100
         mofid_embeds = self.mofid_encoder(mofid_embeds)
         
-
         
-        # class tokens
-        cls_tokens = torch.zeros(B).to(mofid_embeds)  # [B]
-        cls_embeds = self.cls_embeddings(cls_tokens[:, None, None])  # [B, 1, hid_dim]
-        cls_mask = torch.ones(B, 1).to(mofid_masks)  # [B, 1]
-
-        # class tokens + mofid_tokens
-        mofid_embeds = torch.cat([cls_embeds, mofid_embeds], dim=1 )
-        mofid_masks = torch.cat([cls_mask, mofid_masks], dim=1)
-
+        
+        # # class tokens
+        # cls_tokens = torch.zeros(B).to(mofid_embeds)  # [B]
+        # cls_embeds = self.cls_embeddings(cls_tokens[:, None, None])  # [B, 1, hid_dim]
+        # cls_mask = torch.zeros(B, 1).to(mofid_masks)  # [B, 1]
+        
+        # # class tokens + mofid_tokens
+        # mofid_embeds = torch.cat([cls_embeds, mofid_embeds], dim=1 )
+        # mofid_masks = torch.cat([cls_mask, mofid_masks], dim=1)
+        # mofid_labels = torch.cat([cls_tokens[:,None], mofid_labels], dim=1)
+        
         
         # vision transformer encoding (xrd)
-        xrd_embeds, xrd_masks, xrd_labels = self.vision_transformer(batch['xrd'].float() )
-
+        xrd_embeds, xrd_masks, xrd_labels = self.vision_transformer(batch['xrd'].float().to(self.device) )
+        
         # add token_type_embedding (mofid ->0, xrd->1)
         mofid_embeds = mofid_embeds + self.token_type_embeddings(
-            torch.zeros_like(mofid_masks, device=self.device).long()
+            torch.zeros_like(mofid_attention_masks, device=self.device).long()
         )
+        
         xrd_embeds = xrd_embeds + self.token_type_embeddings(
             torch.ones_like(xrd_masks, device=self.device).long()
         )        
-
+        
         x = torch.cat([mofid_embeds, xrd_embeds], dim=1)
-        x_masks = torch.cat([mofid_masks, xrd_masks], dim=1)
-
+        x_masks = torch.cat([mofid_attention_masks, xrd_masks], dim=1)
+        
         # transformer blocks
         attn_weights = []
         for i, blk in enumerate(self.vision_transformer.blocks):
             x, _attn = blk(x, mask=x_masks)
-
+        
             if self.vis:
                 attn_weights.append(_attn)
-
+        
         x = self.vision_transformer.norm(x)
         cls_feats = self.pooler(x)
-
+        
         mofid_feats, xrd_feats = (
             x[:, : mofid_embeds.shape[1]],
             x[:, mofid_embeds.shape[1] :],            
         )
-
+        
         # get batch for target values
         results = {key: value for key, value in batch.items() if key not in self.exclude_keys}
         results.update({
@@ -160,8 +168,10 @@ class MultiModal(LightningModule):
             'xrd_masks': xrd_masks,
             'xrd_labels': xrd_labels,
             'attn_weights': attn_weights,
-
+        
         })
+
+
 
         # calculate losses
         loss_dict = self.get_loss(results)
@@ -202,6 +212,7 @@ class MultiModal(LightningModule):
         output = self(batch)
         loss_dict = self.get_loss(output)
         total_loss = sum([v for k, v in loss_dict.items() if "loss" in k])
+        self.log('train_loss', total_loss, sync_dist=True, logger=True, prog_bar=True )
         return total_loss
 
     def on_train_epoch_end(self):
@@ -231,7 +242,7 @@ class MultiModal(LightningModule):
         return output
 
     def on_test_epoch_end(self):
-        module_utils.epoch_wrapup(self)
+        epoch_wrapup(self)
 
         # calculate r2 score when regression
         if len(self.test_logits) > 1:
@@ -247,7 +258,7 @@ class MultiModal(LightningModule):
 
     def on_predict_start(self):
         self.write_log = False
-        module_utils.set_task(self)
+
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
         output = self(batch)

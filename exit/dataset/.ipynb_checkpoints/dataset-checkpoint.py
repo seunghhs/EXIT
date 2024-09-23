@@ -36,8 +36,9 @@ class BasicDataset(Dataset):
         self.xrd = torch.tensor(self.xrd, dtype=torch.float32)
         self.sa = torch.tensor(self.sa, dtype=torch.float32)
         self.pv = torch.tensor(self.pv, dtype=torch.float32)
-        
-        self.tokens = self.get_tokens(self.mofid)
+
+        self.tokens, self.attention_mask = self.get_tokens(self.mofid)
+
            
     def __len__(self):
         return len(self.xrd)
@@ -50,9 +51,11 @@ class BasicDataset(Dataset):
                 "sa": self.sa[index],
                 "pv": self.pv[index],
                 "mofid": self.mofid[index],
-                "name": self.name[index],
-                "ref": self.ref[index],
-                "tokens" : self.tokens[index]
+                "input_ids": self.tokens[index],
+                "attention_mask": self.attention_mask[index]
+                #"name": self.name[index],
+                #"ref": self.ref[index],
+
 
             }
         )
@@ -60,41 +63,41 @@ class BasicDataset(Dataset):
         return results
     
     def get_tokens(self, mofid):
-        token =  np.array([tokenizer.encode(i, max_length=512, truncation=True,padding='max_length') for i in mofid])
-        return token
+        #token =  np.array([tokenizer.encode(i, max_length=512, truncation=True,padding='max_length') for i in mofid])
+        token_dict = tokenizer(mofid,max_length=512, truncation=True,padding='max_length' )
 
-class MOFpretrainDataset(Dataset):
-    def __init__(
-        self,
-        data_dir: str,
-    ):
-        """
-        Dataset for pretrained MOF.
-        Args:
-            data_dir (str): where data_dir(.pkl) for xrd, sa (surface area), pv (pore volume), and mofid ; 
-        """
-        super().__init__()
-        self.data_dir = data_dir
-        print(f"read {self.data_dir}...")
+        return token_dict['input_ids'], token_dict['attention_mask']
 
-        if not os.path.isfile(self.data_dir):
-            raise FileNotFoundError(
-                f"{self.data_dir} doesn't exist"
-            )
 
-        with open(self.data_dir, "rb") as h:
-            data_list = pickle.load(h)
-        self.xrd, self.sa, self.pv, self.mofid, self.name, self.ref =\
-        zip(*[(np.expand_dims(item['xrd'], axis=0), item['sa'], item['pv'], item['mofid'], item['name'], item['ref']) for item in data_list])
-        self.tokens = self.get_tokens(self.mofid)
-           
-    def __len__(self):
-        return len(self.xrd)
+def custom_collate_fn(batch, data_collator):
+    # Extract only input_ids for each data item and pass them individually to data_collator
+    for item in batch:
+        input_ids_batch = {"input_ids": item["input_ids"], "attention_mask": item["attention_mask"]}
 
-    def __getitem__(self, index):
-        X = torch.from_numpy(np.asarray(self.tokens[index]))
-        return X.type(torch.LongTensor)
-    
-    def get_tokens(self, mofid):
-        token =  np.array([tokenizer.encode(i, max_length=512, truncation=True,padding='max_length') for i in mofid])
-        return token
+        # DataCollatorForLanguageModeling only processes input_ids of each data item
+        masked_batch = data_collator([input_ids_batch])
+
+        # Add masked input_ids, attention_mask, labels, etc. to the item
+        item.update({key: value.squeeze(0) for key, value in masked_batch.items()})
+
+    # Check whether it is a tensor, treat tensors as stack, others as list
+    def batch_stack_or_list(data_list):
+        if isinstance(data_list[0], torch.Tensor):
+            return torch.stack(data_list)
+        else:
+            return data_list
+
+    # Check if there are fields to merge and process them
+    merged_batch = {}
+    for key in batch[0].keys():
+        data_list = [bat[key] for bat in batch]
+        
+        # 'input_ids', 'attention_mask', and 'labels' are processed unconditionally
+        if key in ['input_ids', 'attention_mask', 'labels']:
+            merged_batch[key] = batch_stack_or_list(data_list)
+        
+        else:
+            if isinstance(data_list[0], (torch.Tensor, str, float, int)):  # check data type
+                merged_batch[key] = batch_stack_or_list(data_list)
+
+    return merged_batch

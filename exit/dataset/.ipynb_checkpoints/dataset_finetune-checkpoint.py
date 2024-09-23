@@ -28,14 +28,13 @@ class BasicDataset(Dataset):
 
         with open(self.data_dir, "rb") as h:
             data_list = pickle.load(h)
-        self.xrd, self.sa, self.pv, self.mofid, self.name, self.ref =\
-        zip(*[(np.expand_dims(item['xrd'], axis=0), item['sa'], item['pv'], item['mofid'], item['name'], item['ref']) for item in data_list])
+        self.xrd, self.regression, self.mofid, self.name, self.ref =\
+        zip(*[(np.expand_dims(item['xrd'], axis=0), item['CH4'],  item['mofid'], item['name'], item['ref']) for item in data_list])
         self.xrd = np.array(self.xrd)
-        self.sa = np.array(self.sa)
-        self.pv = np.array(self.pv)
+        self.regression = np.array(self.regression)
         self.xrd = torch.tensor(self.xrd, dtype=torch.float32)
-        self.sa = torch.tensor(self.sa, dtype=torch.float32)
-        self.pv = torch.tensor(self.pv, dtype=torch.float32)
+        self.regression = torch.tensor(self.regression, dtype=torch.float32)
+
 
         self.tokens, self.attention_mask = self.get_tokens(self.mofid)
 
@@ -48,8 +47,7 @@ class BasicDataset(Dataset):
         results.update(
             {
                 "xrd": self.xrd[index],
-                "sa": self.sa[index],
-                "pv": self.pv[index],
+                "regression": self.regression[index],
                 "mofid": self.mofid[index],
                 "input_ids": self.tokens[index],
                 "attention_mask": self.attention_mask[index]
