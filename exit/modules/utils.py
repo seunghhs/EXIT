@@ -1,8 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchmetrics.functional import mean_absolute_error
+from torchmetrics.functional import mean_absolute_error, r2_score
 from torch.optim import AdamW
+import pytorch_lightning as pl
 from transformers import (
     get_polynomial_decay_schedule_with_warmup,
     get_cosine_schedule_with_warmup,
@@ -29,6 +30,7 @@ def set_metrics(pl_module):
             if k in ['regression', 'pv', 'sa', ]:
                 setattr(pl_module, f"{split}_{k}_loss", Scalar())
                 setattr(pl_module, f"{split}_{k}_mae", Scalar())
+                setattr(pl_module, f"{split}_{k}_r2", Scalar())
             else:
                 setattr(pl_module, f"{split}_{k}_accuracy", Accuracy())
                 setattr(pl_module, f"{split}_{k}_loss", Scalar())
@@ -59,10 +61,15 @@ def compute_pv_loss(module, results, normalizer):
     mae = getattr(module, f"{phase}_pv_mae")(
         mean_absolute_error(results["pv_logits"], results["pv_labels"])
     )
+    
+    r2 = getattr(module, f"{phase}_pv_r2")(
+        r2_score(results["pv_logits"], results["pv_labels"])
+    )
 
     if module.write_log:
-        module.log(f"pv/{phase}/loss", loss, sync_dist=True)
-        module.log(f"pv/{phase}/mae", mae, sync_dist=True)    
+        module.log(f"pv/{phase}/loss", loss, on_step=False, on_epoch=True,sync_dist=True)
+        module.log(f"pv/{phase}/mae", mae, on_step=False, on_epoch=True, sync_dist=True)
+        module.log(f"pv/{phase}/r2", r2, on_step=False, on_epoch=True, sync_dist=True)
 
     return results
 
@@ -92,10 +99,14 @@ def compute_sa_loss(module, results, normalizer):
     mae = getattr(module, f"{phase}_sa_mae")(
         mean_absolute_error(results["sa_logits"], results["sa_labels"])
     )
+    r2 = getattr(module, f"{phase}_sa_r2")(
+        r2_score(results["sa_logits"], results["sa_labels"])
+    )
 
     if module.write_log:
-        module.log(f"sa/{phase}/loss", loss, sync_dist=True)
-        module.log(f"sa/{phase}/mae", mae, sync_dist=True)    
+        module.log(f"sa/{phase}/loss", loss, on_step=False,  on_epoch=True, sync_dist=True)
+        module.log(f"sa/{phase}/mae", mae, on_step=False, on_epoch=True, sync_dist=True) 
+        module.log(f"sa/{phase}/r2", r2, on_step=False, on_epoch=True, sync_dist=True) 
 
     return results
 
@@ -110,7 +121,7 @@ def compute_mofid_loss(module, results):
     )  # [B, output_dim]
     
     masks = (results['mofid_masks']).to(logits.device)
-    labels = (results["mofid_labels"]).to(logits.device)  # [B]
+    labels = (results["labels"]).to(logits.device)  # [B]
     
 
     loss = F.cross_entropy(logits[masks], labels[masks])
@@ -131,8 +142,8 @@ def compute_mofid_loss(module, results):
     )
 
     if module.write_log:
-        module.log(f"mofid/{phase}/loss", loss, sync_dist=True)
-        module.log(f"mofid/{phase}/accuracy", acc, sync_dist=True)
+        module.log(f"mofid/{phase}/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
+        module.log(f"mofid/{phase}/accuracy", acc, on_step=False, on_epoch=True, sync_dist=True)
 
     return results
 
@@ -164,10 +175,14 @@ def compute_regression_loss(module, results, normalizer):
     mae = getattr(module, f"{phase}_regression_mae")(
         mean_absolute_error(results["regression_logits"], results["regression_labels"])
     )
+    r2 = getattr(module, f"{phase}_regression_r2")(
+        r2_score(results["regression_logits"], results["regression_labels"])
+    )
 
     if module.write_log:
-        module.log(f"regression/{phase}/loss", loss, sync_dist=True)
-        module.log(f"regression/{phase}/mae", mae, sync_dist=True)    
+        module.log(f"regression/{phase}/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
+        module.log(f"regression/{phase}/mae", mae, on_step=False, on_epoch=True, sync_dist=True) 
+        module.log(f"regression/{phase}/r2", r2, on_step=False, on_epoch=True,sync_dist=True) 
 
     return results
 
@@ -202,30 +217,90 @@ def compute_classification_loss(module, results):
     )
 
     if module.write_log:
-        module.log(f"classification/{phase}/loss", loss, sync_dist=True)
-        module.log(f"classification/{phase}/accuracy", acc, sync_dist=True)
+        module.log(f"classification/{phase}/loss", loss, on_step=False, on_epoch=True,sync_dist=True)
+        module.log(f"classification/{phase}/accuracy", acc, on_step=False, on_epoch=True, sync_dist=True)
 
     return ret
 #===================== loss =====================
+
+# def epoch_wrapup(pl_module):
+#     phase = "train" if pl_module.training else "val"
+
+#     the_metric = 0
+
+#     for loss_name, v in pl_module.hparams.config["loss_names"].items():
+#         if v < 1:
+#             continue
+
+#         if loss_name in ["regression" , 'pv', 'sa', ]:
+#             # mse loss
+#             pl_module.log(
+#                 f"{loss_name}/{phase}/loss_epoch",
+#                 getattr(pl_module, f"{phase}_{loss_name}_loss").compute(),
+#                 batch_size=pl_module.hparams["config"]["per_gpu_batchsize"],
+#                 sync_dist=True,
+#             )
+#             getattr(pl_module, f"{phase}_{loss_name}_loss").reset()
+#             # mae loss
+#             value = getattr(pl_module, f"{phase}_{loss_name}_mae").compute()
+#             pl_module.log(
+#                 f"{loss_name}/{phase}/mae_epoch",
+#                 value,
+#                 batch_size=pl_module.hparams["config"]["per_gpu_batchsize"],
+#                 sync_dist=True,
+#             )
+#             getattr(pl_module, f"{phase}_{loss_name}_mae").reset()
+
+#             value = -value
+#         else:
+#             value = getattr(pl_module, f"{phase}_{loss_name}_accuracy").compute()
+#             pl_module.log(
+#                 f"{loss_name}/{phase}/accuracy_epoch",
+#                 value,
+#                 batch_size=pl_module.hparams["config"]["per_gpu_batchsize"],
+#                 sync_dist=True,
+#             )
+#             getattr(pl_module, f"{phase}_{loss_name}_accuracy").reset()
+#             pl_module.log(
+#                 f"{loss_name}/{phase}/loss_epoch",
+#                 getattr(pl_module, f"{phase}_{loss_name}_loss").compute(),
+#                 batch_size=pl_module.hparams["config"]["per_gpu_batchsize"],
+#                 sync_dist=True,
+#             )
+#             getattr(pl_module, f"{phase}_{loss_name}_loss").reset()
+
+#         the_metric += value
+
+#     pl_module.log(f"{phase}/the_metric", the_metric, sync_dist=True)
+
 
 def epoch_wrapup(pl_module):
     phase = "train" if pl_module.training else "val"
 
     the_metric = 0
-
+    the_metric_2 = 0
+    
+    if len(pl_module.trainer.optimizers) > 0:
+        for i, param_group in enumerate(pl_module.trainer.optimizers[0].param_groups):
+            current_lr = param_group['lr']
+            pl_module.log(f'lr_group_{i}', current_lr,   sync_dist=True)
+    
     for loss_name, v in pl_module.hparams.config["loss_names"].items():
         if v < 1:
             continue
 
         if loss_name in ["regression" , 'pv', 'sa', ]:
-            # mse loss
+            # mse 
+            tmp_loss = getattr(pl_module, f"{phase}_{loss_name}_loss").compute()
             pl_module.log(
                 f"{loss_name}/{phase}/loss_epoch",
-                getattr(pl_module, f"{phase}_{loss_name}_loss").compute(),
+                tmp_loss,
                 batch_size=pl_module.hparams["config"]["per_gpu_batchsize"],
                 sync_dist=True,
             )
+            
             getattr(pl_module, f"{phase}_{loss_name}_loss").reset()
+            
             # mae loss
             value = getattr(pl_module, f"{phase}_{loss_name}_mae").compute()
             pl_module.log(
@@ -236,8 +311,25 @@ def epoch_wrapup(pl_module):
             )
             getattr(pl_module, f"{phase}_{loss_name}_mae").reset()
 
+
             value = -value
+
+
+            r2 = getattr(pl_module, f"{phase}_{loss_name}_r2").compute()
+            pl_module.log(
+                f"{loss_name}/{phase}/r2_epoch",
+                r2,
+                batch_size=pl_module.hparams["config"]["per_gpu_batchsize"],
+                sync_dist=True,
+            )
+            getattr(pl_module, f"{phase}_{loss_name}_r2").reset()
+
+        
         else:
+            
+            # mse 
+            tmp_loss = getattr(pl_module, f"{phase}_{loss_name}_loss").compute()
+
             value = getattr(pl_module, f"{phase}_{loss_name}_accuracy").compute()
             pl_module.log(
                 f"{loss_name}/{phase}/accuracy_epoch",
@@ -254,10 +346,11 @@ def epoch_wrapup(pl_module):
             )
             getattr(pl_module, f"{phase}_{loss_name}_loss").reset()
 
-        the_metric += value
+        the_metric += tmp_loss
+        the_metric_2 += value
 
     pl_module.log(f"{phase}/the_metric", the_metric, sync_dist=True)
-
+    pl_module.log(f"{phase}/the_metric_2", the_metric_2, sync_dist=True)
 
 
 def set_schedule(module):
@@ -370,8 +463,15 @@ def set_schedule(module):
             lr_end=end_lr,
             power=decay_power,
         )
-
-    sched = {"scheduler": scheduler, "interval": "step"}
+        
+    if pl.__version__ >= "2.0.0":
+        sched = {
+            "scheduler": scheduler,
+            "interval": "epoch",  # epoch
+            "frequency": 1,      
+        }
+    else: # step
+        sched = {"scheduler": scheduler, "interval": "step"}
 
     return (
         [optimizer],

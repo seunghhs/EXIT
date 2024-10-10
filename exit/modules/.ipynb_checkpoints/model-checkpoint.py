@@ -102,6 +102,10 @@ class MultiModal(LightningModule):
 
         self.test_logits = []
         self.test_labels = []
+        self.pv_test_logits = []
+        self.pv_test_labels = []
+        self.sa_test_logits = []
+        self.sa_test_labels = []
 
     def forward(self, batch):
         B = len(batch['xrd'].to(self.device))
@@ -163,12 +167,11 @@ class MultiModal(LightningModule):
             'raw_cls_feats': x[:, 0],
             'mofid_feats': mofid_feats,
             'mofid_masks': mofid_masks,
-            'mofid_labels': mofid_labels,
+            #'mofid_labels': mofid_labels,
             'xrd_feats': xrd_feats,
             'xrd_masks': xrd_masks,
             'xrd_labels': xrd_labels,
             'attn_weights': attn_weights,
-        
         })
 
 
@@ -213,6 +216,11 @@ class MultiModal(LightningModule):
         loss_dict = self.get_loss(output)
         total_loss = sum([v for k, v in loss_dict.items() if "loss" in k])
         self.log('train_loss', total_loss, sync_dist=True, logger=True, prog_bar=True )
+        
+        # for i, param_group in enumerate(self.trainer.optimizers[0].param_groups):
+        #     current_lr = param_group['lr']
+        #     self.log(f'lr_group_{i}', current_lr,   sync_dist=True)
+        
         return total_loss
 
     def on_train_epoch_end(self):
@@ -239,6 +247,15 @@ class MultiModal(LightningModule):
         if "regression_logits" in output.keys():
             self.test_logits += output["regression_logits"].tolist()
             self.test_labels += output["regression_labels"].tolist()
+
+        if "pv_logits" in output.keys():
+            self.pv_test_logits += output["pv_logits"].tolist()
+            self.pv_test_labels += output["pv_labels"].tolist()
+            
+        if "sa_logits" in output.keys():
+            self.sa_test_logits += output["sa_logits"].tolist()
+            self.sa_test_labels += output["sa_labels"].tolist()
+            
         return output
 
     def on_test_epoch_end(self):
@@ -247,11 +264,28 @@ class MultiModal(LightningModule):
         # calculate r2 score when regression
         if len(self.test_logits) > 1:
             r2 = r2_score(np.array(self.test_labels), np.array(self.test_logits))
+            mae = mean_absolute_error(np.array(self.test_labels), np.array(self.test_logits))
             self.log(f"test/r2_score", r2, sync_dist=True)
+            self.log(f"test/mae", mae, sync_dist=True )
             self.test_labels.clear()
             self.test_logits.clear()
 
+        if len(self.pv_test_logits) > 1:
+            r2 = r2_score(np.array(self.pv_test_labels), np.array(self.pv_test_logits))
+            mae = mean_absolute_error(np.array(self.pv_test_labels), np.array(self.pv_test_logits))
+            self.log(f"test/pv_r2_score", r2, sync_dist=True)
+            self.log(f"test/pv_mae", mae, sync_dist=True )
+            self.pv_test_labels.clear()
+            self.pv_test_logits.clear()    
 
+        if len(self.sa_test_logits) > 1:
+            r2 = r2_score(np.array(self.sa_test_labels), np.array(self.sa_test_logits))
+            mae = mean_absolute_error(np.array(self.sa_test_labels), np.array(self.sa_test_logits))
+            self.log(f"test/sa_r2_score", r2, sync_dist=True)
+            self.log(f"test/sa_mae", mae, sync_dist=True )
+            self.sa_test_labels.clear()
+            self.sa_test_logits.clear()
+    
     def configure_optimizers(self):
         return set_schedule(self)
 
@@ -295,6 +329,7 @@ class MultiModal(LightningModule):
         self.write_log = True
 
     def lr_scheduler_step(self, scheduler, *args):
+        print(f"Calling scheduler.step() at epoch {self.current_epoch}, step {self.global_step}")
         if len(args) == 2:
             optimizer_idx, metric = args
         elif len(args) == 1:

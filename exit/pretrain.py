@@ -29,7 +29,7 @@ os.environ["CUDA_LAUNCH_BLOCKING"]="1"
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    #parser.add_argument('config', type=str)
+    parser.add_argument('--config', type=str, default = f'{__root_dir__}/config/pretrain.yml' )
     parser.add_argument('--is_test', type=bool, default=False)
     parser.add_argument('--accelerator', type=str, default='gpu')
     parser.add_argument('--devices', type=int, default = 1)
@@ -39,7 +39,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     
     
-    with open(f'{__root_dir__}/config/pretrain.yml', 'r') as file:
+    with open(args.config, 'r') as file:
         config = yaml.safe_load(file)
 
     pl.seed_everything(config['seed'])
@@ -59,7 +59,7 @@ if __name__ == '__main__':
         config['dataset']['test_data_dir'] = test_data_dir
 
     # ckpt 
-    ckpt_dir = f'./ckpt_{args.ckpt_dir}/{datetime.datetime.now().strftime("%Y-%m-%d")}'
+    ckpt_dir = f'./ckpt_{args.ckpt_dir}/' #{datetime.datetime.now().strftime("%Y-%m-%d")}
     os.makedirs(ckpt_dir, exist_ok=True)
     checkpoint_callback = ModelCheckpoint(
         dirpath = ckpt_dir, 
@@ -67,17 +67,18 @@ if __name__ == '__main__':
         save_last=True,
         save_top_k=1,
         monitor="val/the_metric",
-        every_n_train_steps=100,
-        mode='max'
+        #every_n_train_steps=100,
+        every_n_epochs=1, 
+        mode='min'
     )    
     seed = config['seed']
     logger = pl.loggers.TensorBoardLogger(
         args.log_dir,
-        name=f'pretrain_seed{seed}_{datetime.datetime.now().strftime("%Y-%m-%d")}',
+        name=f'pretrain_seed{seed}', #{datetime.datetime.now().strftime("%Y-%m-%d")}
     )        
 
-    lr_callback = pl.callbacks.LearningRateMonitor(logging_interval="step")
-    early_callback = EarlyStopping(monitor="val/the_metric", mode="max",patience=10,)
+    lr_callback = pl.callbacks.LearningRateMonitor(logging_interval="epoch")
+    early_callback = EarlyStopping(monitor="val/the_metric", mode="min",patience=5,)
     
     callbacks = [checkpoint_callback, lr_callback, early_callback]
     
@@ -119,28 +120,27 @@ if __name__ == '__main__':
     
     # pretrain 15% masking
     tokenizer = MOFTokenizer(model_max_length = 512, padding_side='right')
-    test_data_collator = DataCollatorForLanguageModeling(
+    data_collator = DataCollatorForLanguageModeling(
         tokenizer=tokenizer,
-        mlm=False
-    )  
+        mlm=True,
+        mlm_probability=0.15  
+    )   
     test_data = BasicDataset(test_data_dir)              
 
-    test_loader =DataLoader(test_data, batch_size=config['per_gpu_batchsize'] ,collate_fn=lambda batch: custom_collate_fn(batch, test_data_collator),
+    test_loader =DataLoader(test_data, batch_size=config['per_gpu_batchsize'] ,collate_fn=lambda batch: custom_collate_fn(batch, data_collator),
                             num_workers =num_workers,
                              shuffle=False) 
     
     if args.is_test:
-
-        model = MultiModal(config).load_from_checkpoint(f'{ckpt_dir}/best.ckpt',  config=config, strict=False)          
+        best_ckpt_list =  glob(os.path.join(ckpt_dir, '*.ckpt'))
+        best_ckpt = [ ckpt for ckpt in best_ckpt_list if os.path.basename(ckpt).startswith('epoch') ][0]
+        print(f'best_ckpt: ', best_ckpt)
+        model = MultiModal.load_from_checkpoint(best_ckpt, config=config, strict=False)          
         trainer.test(model, test_loader)
 
 
     else:
-        data_collator = DataCollatorForLanguageModeling(
-            tokenizer=tokenizer,
-            mlm=True,
-            mlm_probability=0.15  
-        )   
+
         train_data = BasicDataset(train_data_dir)
 
 
@@ -152,5 +152,5 @@ if __name__ == '__main__':
 
      
         
-        trainer.fit(model, train_loader, test_loader)
+        trainer.fit(model, train_loader, test_loader,  ckpt_path = config['resume_from'])
     

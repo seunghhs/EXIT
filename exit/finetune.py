@@ -72,18 +72,19 @@ if __name__ == '__main__':
         verbose=True,
         save_last=True,
         save_top_k=1,
-        monitor="val/the_metric",
-        every_n_train_steps=100,
+        monitor="val/the_metric_2",
+        #every_n_train_steps=100,
+        every_n_epochs=1, 
         mode='max'
     )    
     seed = config['seed']
     logger = pl.loggers.TensorBoardLogger(
         args.log_dir,
-        name=f'finetune_seed{seed}_', #{datetime.datetime.now().strftime("%Y-%m-%d")}
+        name=f'finetune_seed{seed}', #{datetime.datetime.now().strftime("%Y-%m-%d")}
     )        
 
-    lr_callback = pl.callbacks.LearningRateMonitor(logging_interval="step")
-    early_callback = EarlyStopping(monitor="val/the_metric", mode="max",patience=5,)
+    lr_callback = pl.callbacks.LearningRateMonitor(logging_interval="epoch")
+    early_callback = EarlyStopping(monitor="val/the_metric_2", mode="max",patience=5,)
     
     callbacks = [checkpoint_callback, lr_callback, early_callback]
     
@@ -106,7 +107,8 @@ if __name__ == '__main__':
     model = MultiModal(config)
 
     if config['resume_from'] is not None:
-        model = MultiModal(config).load_from_checkpoint(config['resume_from'],  config=config, strict=False)
+        print(f'best_ckpt: ', config['resume_from'])
+        model = MultiModal.load_from_checkpoint(config['resume_from'],  config=config, strict=False)
 
     trainer = Trainer(
                     
@@ -158,5 +160,5 @@ if __name__ == '__main__':
         valid_loader =DataLoader(valid_data, batch_size=config['per_gpu_batchsize'] ,collate_fn=lambda batch: custom_collate_fn(batch, data_collator),
                                 num_workers =num_workers,
                                  shuffle=False)              
-        trainer.fit(model, train_loader, valid_loader)
+        trainer.fit(model, train_loader, valid_loader, ckpt_path = config['resume_from'])
     

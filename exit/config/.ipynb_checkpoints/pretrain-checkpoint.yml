@@ -1,17 +1,17 @@
 dataset:
-    train_data_dir:
-    test_data_dir:
+    train_data_dir: /home/users/seunghh/data_mining/exit/new_data_mofid/qmof.pkl
+    test_data_dir: /home/users/seunghh/data_mining/exit/new_data_mofid/core.pkl
 
 
 
 
 model:
     seq_length : 4500
-    patch_size : 10
+    patch_size : 20
     in_chans : 1
     embed_dim : 768
     hidden_dim: 768
-    ntoken: 1086
+    ntoken: 4021
     d_model: 768
     nhead: 8
     d_hid: 512
@@ -42,7 +42,7 @@ decay_power: 1
 optim_type: adamw
 warmup_steps: 0.05
 
-pv_mean:
-pv_std:
-sa_mean:
-sa_std:
+pv_mean: 1.3282
+pv_std: 1.1354
+sa_mean: 2562.1021
+sa_std: 1170.1410
