@@ -95,7 +95,10 @@ class MultiModal(LightningModule):
             self.classification_head.apply(init_weights)
             self.current_tasks.append('classification')
 
-
+        self.weighted_ratio = {
+            task: config.get(f'{task}_weight', 1)  # Example: Get 'sa_weight' if it exists, set it to 1 if not.
+            for task in self.current_tasks
+        }
         # #===================== load pretrained model =====================
         # if config['model_path'] is not None:
         #     ckpt = torch.load(config['model_path'])
@@ -214,12 +217,14 @@ class MultiModal(LightningModule):
     def training_step(self, batch, batch_idx):
         output = self(batch)
         loss_dict = self.get_loss(output)
-        total_loss = sum([v for k, v in loss_dict.items() if "loss" in k])
+        total_loss = sum([
+            v * self.weighted_ratio.get(k.split('_')[0], 1)  
+            for k, v in loss_dict.items() 
+            if "loss" in k
+        ])
         self.log('train_loss', total_loss, sync_dist=True, logger=True, prog_bar=True )
         
-        # for i, param_group in enumerate(self.trainer.optimizers[0].param_groups):
-        #     current_lr = param_group['lr']
-        #     self.log(f'lr_group_{i}', current_lr,   sync_dist=True)
+
         
         return total_loss
 
@@ -229,7 +234,11 @@ class MultiModal(LightningModule):
     def validation_step(self, batch, batch_idx):
         output = self(batch)
         loss_dict = self.get_loss(output)
-        total_loss = sum([v for k, v in loss_dict.items() if "loss" in k])
+        total_loss = sum([
+            v * self.weighted_ratio.get(k.split('_')[0], 1)  
+            for k, v in loss_dict.items() 
+            if "loss" in k
+        ])
         return total_loss
          
     def on_validation_epoch_end(self) -> None:
@@ -329,7 +338,7 @@ class MultiModal(LightningModule):
         self.write_log = True
 
     def lr_scheduler_step(self, scheduler, *args):
-        print(f"Calling scheduler.step() at epoch {self.current_epoch}, step {self.global_step}")
+        #print(f"Calling scheduler.step() at epoch {self.current_epoch}, step {self.global_step}")
         if len(args) == 2:
             optimizer_idx, metric = args
         elif len(args) == 1:

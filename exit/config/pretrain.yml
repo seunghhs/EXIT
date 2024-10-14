@@ -31,16 +31,20 @@ num_nodes: 1
 model_path:
 visualize: False
 test: False
-per_gpu_batchsize: 8
-batch_size: 128
+per_gpu_batchsize: 16
+batch_size: 192
 resume_from: 
-learning_rate: 0.0001
+learning_rate: 0.0005
 weight_decay: 0.01
 lr_mult: 1
 end_lr: 0
 decay_power: 1
 optim_type: adamw
 warmup_steps: 0.05
+
+sa_weight: 0.5
+pv_weight: 0.25
+mofid_weight: 0.25
 
 pv_mean: 1.3282
 pv_std: 1.1354

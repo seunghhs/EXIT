@@ -61,14 +61,16 @@ if __name__ == '__main__':
     # ckpt 
     ckpt_dir = f'./ckpt_{args.ckpt_dir}/' #{datetime.datetime.now().strftime("%Y-%m-%d")}
     os.makedirs(ckpt_dir, exist_ok=True)
+
+    
     checkpoint_callback = ModelCheckpoint(
         dirpath = ckpt_dir, 
         verbose=True,
         save_last=True,
         save_top_k=1,
         monitor="val/the_metric",
-        #every_n_train_steps=100,
-        every_n_epochs=1, 
+        #every_n_train_steps=10,
+        #every_n_epochs=1, 
         mode='min'
     )    
     seed = config['seed']
@@ -77,7 +79,7 @@ if __name__ == '__main__':
         name=f'pretrain_seed{seed}', #{datetime.datetime.now().strftime("%Y-%m-%d")}
     )        
 
-    lr_callback = pl.callbacks.LearningRateMonitor(logging_interval="epoch")
+    lr_callback = pl.callbacks.LearningRateMonitor(logging_interval="step")
     early_callback = EarlyStopping(monitor="val/the_metric", mode="min",patience=5,)
     
     callbacks = [checkpoint_callback, lr_callback, early_callback]
@@ -101,7 +103,7 @@ if __name__ == '__main__':
     model = MultiModal(config)
 
     if config['resume_from'] is not None:
-        model = MultiModal(config).load_from_checkpoint(config['resume_from'],  config=config, strict=False)
+        model = MultiModal.load_from_checkpoint(config['resume_from'],  config=config, strict=False)
 
     trainer = Trainer(
                     
