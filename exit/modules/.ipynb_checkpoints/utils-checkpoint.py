@@ -346,8 +346,8 @@ def epoch_wrapup(pl_module):
             )
             getattr(pl_module, f"{phase}_{loss_name}_loss").reset()
 
-        the_metric += tmp_loss
-        the_metric_2 += value
+        the_metric += tmp_loss * pl_module.weighted_ratio.get(loss_name, 1)
+        the_metric_2 += value * pl_module.weighted_ratio.get(loss_name, 1)
 
     pl_module.log(f"{phase}/the_metric", the_metric, sync_dist=True)
     pl_module.log(f"{phase}/the_metric_2", the_metric_2, sync_dist=True)
