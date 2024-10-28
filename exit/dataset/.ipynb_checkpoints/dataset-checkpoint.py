@@ -28,14 +28,14 @@ class BasicDataset(Dataset):
 
         with open(self.data_dir, "rb") as h:
             data_list = pickle.load(h)
-        self.xrd, self.sa, self.pv, self.mofid, self.name, self.ref =\
-        zip(*[(np.expand_dims(item['xrd'], axis=0), item['sa'], item['pv'], item['mofid'], item['name'], item['ref']) for item in data_list])
+        self.xrd, self.miller, self.miller_class, self.pv, self.mofid, self.name, self.ref =\
+        zip(*[(np.expand_dims(item['xrd'], axis=0), item['miller'], item['miller_class'], item['pv'], item['mofid'], item['name'], item['ref']) for item in data_list])
         self.xrd = np.array(self.xrd)
-        self.sa = np.array(self.sa)
         self.pv = np.array(self.pv)
         self.xrd = torch.tensor(self.xrd, dtype=torch.float32)
-        self.sa = torch.tensor(self.sa, dtype=torch.float32)
+        #self.sa = torch.tensor(self.sa, dtype=torch.float32)
         self.pv = torch.tensor(self.pv, dtype=torch.float32)
+        self.miller_class = torch.tensor(self.miller_class, dtype=torch.int64)
 
         self.tokens, self.attention_mask = self.get_tokens(self.mofid)
 
@@ -48,14 +48,15 @@ class BasicDataset(Dataset):
         results.update(
             {
                 "xrd": self.xrd[index],
-                "sa": self.sa[index],
+                "miller_class" : self.miller_class[index],
                 "pv": self.pv[index],
                 "mofid": self.mofid[index],
                 "input_ids": self.tokens[index],
                 "attention_mask": self.attention_mask[index]
+                
                 #"name": self.name[index],
                 #"ref": self.ref[index],
-
+                #"sa": self.sa[index],
 
             }
         )

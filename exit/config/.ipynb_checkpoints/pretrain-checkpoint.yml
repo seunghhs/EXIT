@@ -1,8 +1,6 @@
 dataset:
-    train_data_dir: /home/users/seunghh/data_mining/exit/new_data_mofid/train.pkl
-    test_data_dir: /home/users/seunghh/data_mining/exit/new_data_mofid/test.pkl
-
-
+    train_data_dir: /home/users/seunghh/data_mining/exit/new_data_mofid_miller/train.pkl
+    test_data_dir: /home/users/seunghh/data_mining/exit/new_data_mofid_miller/test.pkl
 
 
 model:
@@ -19,11 +17,12 @@ model:
 
 
 loss_names:
-    sa: 1
+    miller: 1
     pv: 1
     mofid: 1
     regression: 0
     classification: 0
+    sa: 0
 
 
 seed: 0
@@ -34,7 +33,7 @@ test: False
 per_gpu_batchsize: 16
 batch_size: 192
 resume_from: 
-learning_rate: 0.0005
+learning_rate: 0.0001
 weight_decay: 0.01
 lr_mult: 1
 end_lr: 0
@@ -42,9 +41,7 @@ decay_power: 1
 optim_type: adamw
 warmup_steps: 0.05
 
-sa_weight: 0.5
-pv_weight: 0.25
-mofid_weight: 0.25
+
 
 pv_mean: 1.3282
 pv_std: 1.1354

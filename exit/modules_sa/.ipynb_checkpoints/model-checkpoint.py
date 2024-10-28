@@ -9,7 +9,7 @@ from exit.modules import heads
 from exit.modules.visiontransformer import VisionTransformer1D
 from exit.modules.mofidtransformer import  MOFidEncoder
 from exit.modules.utils import Normalizer, init_weights
-from exit.modules.utils import compute_pv_loss, compute_sa_loss,compute_regression_loss, compute_classification_loss, compute_mofid_loss, compute_miller_loss
+from exit.modules.utils import compute_pv_loss, compute_sa_loss,compute_regression_loss, compute_classification_loss, compute_mofid_loss
 from exit.modules.utils import epoch_wrapup, set_schedule, set_metrics
 
 
@@ -30,8 +30,7 @@ class MultiModal(LightningModule):
         in_chans = config['model']['in_chans'],
         embed_dim = config['model']['embed_dim'],               
         )
-
-        self.nmiller = config['model'].get('nmiller', 100)
+        
         self.ntoken = config['model']['ntoken']
         self.visualize = config['visualize']
         self.hidden_dim = config['model']['hidden_dim']
@@ -71,12 +70,7 @@ class MultiModal(LightningModule):
             self.current_tasks.append('pv')
             self.pv_mean = config['pv_mean']
             self.pv_std = config['pv_std']
-
-        if config["loss_names"]["miller"] > 0:
-            self.miller_head = heads.MillerHead(self.hidden_dim, self.nmiller )
-            self.miller_head.apply(init_weights)
-            self.current_tasks.append('miller')
-        
+            
         if config["loss_names"]["sa"] > 0:
             self.sa_head = heads.SAHead(self.hidden_dim)
             self.sa_head.apply(init_weights)
@@ -209,8 +203,6 @@ class MultiModal(LightningModule):
         if 'mofid' in self.current_tasks:
             losses.update(compute_mofid_loss(self, results))
 
-        if 'miller' in self.current_tasks:
-            losses.update(compute_miller_loss(self, results))
         
         if 'regression' in self.current_tasks:
             normalizer = Normalizer(self.regression_mean, self.regression_std, self.device)

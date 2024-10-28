@@ -80,7 +80,7 @@ if __name__ == '__main__':
     )        
 
     lr_callback = pl.callbacks.LearningRateMonitor(logging_interval="step")
-    early_callback = EarlyStopping(monitor="val/the_metric", mode="min",patience=5,)
+    early_callback = EarlyStopping(monitor="val/the_metric", mode="min",patience=10,)
     
     callbacks = [checkpoint_callback, lr_callback, early_callback]
     

@@ -150,6 +150,38 @@ def compute_mofid_loss(module, results):
 
 
 
+def compute_miller_loss(module, results):
+
+    logits = module.miller_head(
+        results["cls_feats"]
+    )  # [B, output_dim]
+    labels = (results["miller_class"]).to(logits.device).long()  # [B]
+    assert len(labels.shape) == 1
+
+    loss = F.cross_entropy(logits, labels)
+
+    results = {
+        "miller_loss": loss,
+        "miller_logits": logits,
+        "miller_labels": labels,
+    }
+
+    # call update() loss and acc
+    phase = "train" if module.training else "val"
+    loss = getattr(module, f"{phase}_miller_loss")(
+        results["miller_loss"]
+    )                                                                                                                                                                                                                                                                                                                                                                                                              
+    acc = getattr(module, f"{phase}_miller_accuracy")(
+        results["miller_logits"], results["miller_labels"]
+    )
+
+    if module.write_log:
+        module.log(f"miller/{phase}/loss", loss, on_step=False, on_epoch=True,sync_dist=True)
+        module.log(f"miller/{phase}/accuracy", acc, on_step=False, on_epoch=True, sync_dist=True)
+
+    return results
+
+
 
 def compute_regression_loss(module, results, normalizer):
     logits = module.regression_head(results['cls_feats'])
@@ -188,12 +220,11 @@ def compute_regression_loss(module, results, normalizer):
 
 
 def compute_classification_loss(module, results):
-    infer = module.infer(batch)
 
     logits, binary = module.classification_head(
-        infer["cls_feats"]
+        results["cls_feats"]
     )  # [B, output_dim]
-    labels = torch.LongTensor(results["classification"]).to(logits.device)  # [B]
+    labels = (results["classification"]).to(logits.device)  # [B]
     assert len(labels.shape) == 1
     if binary:
         logits = logits.squeeze(dim=-1)
@@ -211,7 +242,7 @@ def compute_classification_loss(module, results):
     phase = "train" if module.training else "val"
     loss = getattr(module, f"{phase}_classification_loss")(
         results["classification_loss"]
-    )                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   
+    )                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
     acc = getattr(module, f"{phase}_classification_accuracy")(
         results["classification_logits"], results["classification_labels"]
     )

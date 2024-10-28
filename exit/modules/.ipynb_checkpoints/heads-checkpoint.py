@@ -79,7 +79,6 @@ class RegressionHead(nn.Module):
         x = self.fc(x)
         return x
 
-
 class ClassificationHead(nn.Module):
     """
     head for Classification
@@ -99,4 +98,20 @@ class ClassificationHead(nn.Module):
         x = self.fc(x)
 
         return x, self.binary
+
+
+class MillerHead(nn.Module):
+    """
+    head for Mileer
+    """
+
+    def __init__(self, hid_dim, n_classes):
+        super().__init__()
+        self.fc = nn.Linear(hid_dim, n_classes)
+
+
+    def forward(self, x):
+        x = self.fc(x)
+
+        return x
 
