@@ -31,7 +31,7 @@ class MultiModal(LightningModule):
         embed_dim = config['model']['embed_dim'],               
         )
 
-        self.nmiller = config['model'].get('nmiller', 100)
+        self.nmiller = config['model'].get('nmiller', 101)
         self.ntoken = config['model']['ntoken']
         self.visualize = config['visualize']
         self.hidden_dim = config['model']['hidden_dim']

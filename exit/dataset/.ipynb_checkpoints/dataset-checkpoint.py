@@ -35,7 +35,7 @@ class BasicDataset(Dataset):
         self.xrd = torch.tensor(self.xrd, dtype=torch.float32)
         #self.sa = torch.tensor(self.sa, dtype=torch.float32)
         self.pv = torch.tensor(self.pv, dtype=torch.float32)
-        self.miller_class = torch.tensor(self.miller_class, dtype=torch.int64)
+        self.miller_class = torch.tensor(self.miller_class)
 
         self.tokens, self.attention_mask = self.get_tokens(self.mofid)
 

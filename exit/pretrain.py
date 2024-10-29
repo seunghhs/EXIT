@@ -26,6 +26,7 @@ torch.multiprocessing.set_sharing_strategy("file_system")
 num_workers =16
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["CUDA_LAUNCH_BLOCKING"]="1"
+os.environ["MASTER_PORT"] = "12356"
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
