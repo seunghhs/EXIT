@@ -19,9 +19,9 @@ class Pooler(nn.Module):
         pooled_output = self.activation(pooled_output)
         return pooled_output
 
-class PVHead(nn.Module):
+class VFHead(nn.Module):
     """
-    head for Pore Volume
+    head for Void Fraction
     """
 
     def __init__(self, hid_dim, n_targets=1):
@@ -100,14 +100,32 @@ class ClassificationHead(nn.Module):
         return x, self.binary
 
 
-class MillerHead(nn.Module):
+class XRDHead(nn.Module):
     """
-    head for Mileer
+    head for XRD
     """
 
-    def __init__(self, hid_dim, n_classes):
+    def __init__(self, hid_dim, n_target):
         super().__init__()
-        self.fc = nn.Linear(hid_dim, n_classes)
+        self.fc = nn.Linear(hid_dim, n_target)
+        
+
+
+    def forward(self, x):
+        x = self.fc(x)
+
+        return x
+
+
+class CellHead(nn.Module):
+    """
+    head for Cell Parameters
+    """
+
+    def __init__(self, hid_dim, n_targets=6):
+        super().__init__()
+        self.fc = nn.Linear(hid_dim, n_targets)
+        
 
 
     def forward(self, x):

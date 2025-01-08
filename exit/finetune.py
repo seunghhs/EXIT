@@ -160,5 +160,5 @@ if __name__ == '__main__':
         valid_loader =DataLoader(valid_data, batch_size=config['per_gpu_batchsize'] ,collate_fn=lambda batch: custom_collate_fn(batch, data_collator),
                                 num_workers =num_workers,
                                  shuffle=False)              
-        trainer.fit(model, train_loader, valid_loader, ckpt_path = config['resume_from'])
+        trainer.fit(model, train_loader, valid_loader, )
     

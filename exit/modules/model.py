@@ -9,12 +9,12 @@ from exit.modules import heads
 from exit.modules.visiontransformer import VisionTransformer1D
 from exit.modules.mofidtransformer import  MOFidEncoder
 from exit.modules.utils import Normalizer, init_weights
-from exit.modules.utils import compute_pv_loss, compute_sa_loss,compute_regression_loss, compute_classification_loss, compute_mofid_loss, compute_miller_loss
+from exit.modules.utils import compute_vf_loss, compute_sa_loss,compute_regression_loss, compute_classification_loss, compute_mofid_loss, compute_xrd_loss
 from exit.modules.utils import epoch_wrapup, set_schedule, set_metrics
 
 
 
-from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
+from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error, accuracy_score
 
 
 class MultiModal(LightningModule):
@@ -22,16 +22,6 @@ class MultiModal(LightningModule):
         super().__init__()
         self.save_hyperparameters()
 
-
-        # set vision transformer
-        self.vision_transformer = VisionTransformer1D(
-        seq_length = config['model']['seq_length'],
-        patch_size = config['model']['patch_size'],
-        in_chans = config['model']['in_chans'],
-        embed_dim = config['model']['embed_dim'],               
-        )
-
-        self.nmiller = config['model'].get('nmiller', 101)
         self.ntoken = config['model']['ntoken']
         self.visualize = config['visualize']
         self.hidden_dim = config['model']['hidden_dim']
@@ -39,50 +29,24 @@ class MultiModal(LightningModule):
         self.current_tasks = []
         self.write_log = True
         self.vis = False
+        self.xrd_mask = False
 
-        # mofid
-
-        self.mofid_encoder = MOFidEncoder(ntoken = config['model']['ntoken'],
-            d_model = config['model']['d_model'] , 
-            nhead = config['model']['nhead'], 
-            d_hid = config['model']['d_hid'],
-            nlayers = config['model']['nlayers'])
-
-
-        
-        # class token
-        self.cls_embeddings = nn.Linear(1, self.hidden_dim)
-        self.cls_embeddings.apply(init_weights)
-
-        # token type embedding
-        self.token_type_embeddings = nn.Embedding(2, self.hidden_dim)
-        self.token_type_embeddings.apply(init_weights)        
-
-        # pooler
-        self.pooler = heads.Pooler(self.hidden_dim)
-        self.pooler.apply(init_weights)
-
-        set_metrics(self)
         
         # ===================== loss =====================
-        if config["loss_names"]["pv"] > 0:
-            self.pv_head = heads.PVHead(self.hidden_dim)
-            self.pv_head.apply(init_weights)
-            self.current_tasks.append('pv')
-            self.pv_mean = config['pv_mean']
-            self.pv_std = config['pv_std']
+        if config["loss_names"]["vf"] > 0:
+            self.vf_head = heads.VFHead(self.hidden_dim)
+            self.vf_head.apply(init_weights)
+            self.current_tasks.append('vf')
+            self.vf_mean = config['vf_mean']
+            self.vf_std = config['vf_std']
 
-        if config["loss_names"]["miller"] > 0:
-            self.miller_head = heads.MillerHead(self.hidden_dim, self.nmiller )
-            self.miller_head.apply(init_weights)
-            self.current_tasks.append('miller')
-        
-        if config["loss_names"]["sa"] > 0:
-            self.sa_head = heads.SAHead(self.hidden_dim)
-            self.sa_head.apply(init_weights)
-            self.current_tasks.append('sa')
-            self.sa_mean = config['sa_mean']
-            self.sa_std = config['sa_std']            
+
+        if config["loss_names"]["xrd"] > 0:
+            self.xrd_mask = True
+            self.xrd_head = heads.XRDHead(self.hidden_dim, config['model']['patch_size'])
+            self.xrd_head.apply(init_weights)
+            self.current_tasks.append('xrd')
+
 
         if config["loss_names"]["mofid"] > 0:
             self.mofid_head = heads.MOFidHead(self.hidden_dim, self.ntoken)
@@ -111,11 +75,48 @@ class MultiModal(LightningModule):
 
         self.test_logits = []
         self.test_labels = []
-        self.pv_test_logits = []
-        self.pv_test_labels = []
-        self.sa_test_logits = []
-        self.sa_test_labels = []
+        self.vf_test_logits = []
+        self.vf_test_labels = []
+        self.xrd_test_logits = []
+        self.xrd_test_labels = []
 
+        # set vision transformer
+        self.vision_transformer = VisionTransformer1D(
+        seq_length = config['model']['seq_length'],
+        patch_size = config['model']['patch_size'],
+        in_chans = config['model']['in_chans'],
+        embed_dim = config['model']['embed_dim'], 
+        mask = self.xrd_mask
+        )
+
+
+
+
+        # mofid
+
+        self.mofid_encoder = MOFidEncoder(ntoken = config['model']['ntoken'],
+            d_model = config['model']['d_model'] , 
+            nhead = config['model']['nhead'], 
+            d_hid = config['model']['d_hid'],
+            nlayers = config['model']['nlayers'])
+
+
+        
+        # class token
+        self.cls_embeddings = nn.Linear(1, self.hidden_dim)
+        self.cls_embeddings.apply(init_weights)
+
+        # token type embedding
+        self.token_type_embeddings = nn.Embedding(2, self.hidden_dim)
+        self.token_type_embeddings.apply(init_weights)        
+
+        # pooler
+        self.pooler = heads.Pooler(self.hidden_dim)
+        self.pooler.apply(init_weights)
+
+        set_metrics(self)
+
+    
     def forward(self, batch):
         B = len(batch['xrd'].to(self.device))
         
@@ -139,7 +140,7 @@ class MultiModal(LightningModule):
         
         
         # vision transformer encoding (xrd)
-        xrd_embeds, xrd_masks, xrd_labels = self.vision_transformer(batch['xrd'].float().to(self.device) )
+        xrd_embeds, xrd_labels, xrd_masks = self.vision_transformer(batch['xrd'].float().to(self.device) )
         
         # add token_type_embedding (mofid ->0, xrd->1)
         mofid_embeds = mofid_embeds + self.token_type_embeddings(
@@ -147,11 +148,14 @@ class MultiModal(LightningModule):
         )
         
         xrd_embeds = xrd_embeds + self.token_type_embeddings(
-            torch.ones_like(xrd_masks, device=self.device).long()
+            torch.ones(xrd_embeds.shape[:2], device=self.device).long()
         )        
+        xrd_attention_masks = torch.ones(xrd_embeds.shape[:2], device=self.device)
+
+
         
         x = torch.cat([mofid_embeds, xrd_embeds], dim=1)
-        x_masks = torch.cat([mofid_attention_masks, xrd_masks], dim=1)
+        x_masks = torch.cat([mofid_attention_masks, xrd_attention_masks], dim=1)
         
         # transformer blocks
         attn_weights = []
@@ -179,7 +183,7 @@ class MultiModal(LightningModule):
             #'mofid_labels': mofid_labels,
             'xrd_feats': xrd_feats,
             'xrd_masks': xrd_masks,
-            'xrd_labels': xrd_labels,
+            'xrd_patches': xrd_labels,
             'attn_weights': attn_weights,
         })
 
@@ -197,9 +201,9 @@ class MultiModal(LightningModule):
         if not len(self.current_tasks):
             return losses
 
-        if 'pv' in self.current_tasks:
-            pv_normalizer = Normalizer(self.pv_mean, self.pv_std, self.device)
-            losses.update(compute_pv_loss(self, results, pv_normalizer))
+        if 'vf' in self.current_tasks:
+            vf_normalizer = Normalizer(self.vf_mean, self.vf_std, self.device)
+            losses.update(compute_vf_loss(self, results, vf_normalizer))
 
         if 'sa' in self.current_tasks:
             sa_normalizer = Normalizer(self.sa_mean, self.sa_std, self.device)
@@ -209,8 +213,9 @@ class MultiModal(LightningModule):
         if 'mofid' in self.current_tasks:
             losses.update(compute_mofid_loss(self, results))
 
-        if 'miller' in self.current_tasks:
-            losses.update(compute_miller_loss(self, results))
+        if 'xrd' in self.current_tasks:
+
+            losses.update(compute_xrd_loss(self, results))
         
         if 'regression' in self.current_tasks:
             normalizer = Normalizer(self.regression_mean, self.regression_std, self.device)
@@ -265,13 +270,19 @@ class MultiModal(LightningModule):
             self.test_logits += output["regression_logits"].tolist()
             self.test_labels += output["regression_labels"].tolist()
 
-        if "pv_logits" in output.keys():
-            self.pv_test_logits += output["pv_logits"].tolist()
-            self.pv_test_labels += output["pv_labels"].tolist()
+        if "vf_logits" in output.keys():
+            self.vf_test_logits += output["vf_logits"].tolist()
+            self.vf_test_labels += output["vf_labels"].tolist()
             
-        if "sa_logits" in output.keys():
-            self.sa_test_logits += output["sa_logits"].tolist()
-            self.sa_test_labels += output["sa_labels"].tolist()
+        # if "sa_logits" in output.keys():
+        #     self.sa_test_logits += output["sa_logits"].tolist()
+        #     self.sa_test_labels += output["sa_labels"].tolist()
+
+        if "xrd_logits" in output.keys():
+            self.xrd_test_logits += output["xrd_logits"].tolist()
+            self.xrd_test_labels += output["xrd_labels"].tolist()            
+            
+        
             
         return output
 
@@ -287,24 +298,25 @@ class MultiModal(LightningModule):
             self.test_labels.clear()
             self.test_logits.clear()
 
-        if len(self.pv_test_logits) > 1:
-            r2 = r2_score(np.array(self.pv_test_labels), np.array(self.pv_test_logits))
-            mae = mean_absolute_error(np.array(self.pv_test_labels), np.array(self.pv_test_logits))
-            self.log(f"test/pv_r2_score", r2, sync_dist=True)
-            self.log(f"test/pv_mae", mae, sync_dist=True )
-            np.savez('pv.npz', labels = np.array(self.pv_test_labels), logits = np.array(self.pv_test_logits) )
-            self.pv_test_labels.clear()
-            self.pv_test_logits.clear()
+        if len(self.vf_test_logits) > 1:
+            r2 = r2_score(np.array(self.vf_test_labels), np.array(self.vf_test_logits))
+            mae = mean_absolute_error(np.array(self.vf_test_labels), np.array(self.vf_test_logits))
+            self.log(f"test/vf_r2_score", r2, sync_dist=True)
+            self.log(f"test/vf_mae", mae, sync_dist=True )
+
+            self.vf_test_labels.clear()
+            self.vf_test_logits.clear()
             
 
-        if len(self.sa_test_logits) > 1:
-            r2 = r2_score(np.array(self.sa_test_labels), np.array(self.sa_test_logits))
-            mae = mean_absolute_error(np.array(self.sa_test_labels), np.array(self.sa_test_logits))
-            self.log(f"test/sa_r2_score", r2, sync_dist=True)
-            self.log(f"test/sa_mae", mae, sync_dist=True )
-            np.savez('sa.npz', labels = np.array(self.sa_test_labels), logits = np.array(self.sa_test_logits) )
-            self.sa_test_labels.clear()
-            self.sa_test_logits.clear()
+        if len(self.xrd_test_logits) > 1:
+
+            r2 = r2_score(np.array(self.xrd_test_labels), np.array(self.xrd_test_logits))
+            mae = mean_absolute_error(np.array(self.xrd_test_labels), np.array(self.xrd_test_logits))
+            self.log(f"test/xrd_r2_score", r2, sync_dist=True)
+            self.log(f"test/xrd_mae", mae, sync_dist=True )
+        
+            self.xrd_test_labels.clear()
+            self.xrd_test_logits.clear()
             
     
     def configure_optimizers(self):

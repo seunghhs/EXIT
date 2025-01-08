@@ -26,6 +26,7 @@ from functools import partial
 
 import torch
 import torch.nn as nn
+import random
 
 from einops.layers.torch import Rearrange
 
@@ -164,6 +165,7 @@ class PatchEmbed1D(nn.Module):
         in_chans=1,  # number of input channels (default 1 for 1D data)
         embed_dim=768,  # dimension of the embedding space
         no_patch_embed_bias=False,
+        mask = False
     ):
         super().__init__()
 
@@ -172,18 +174,81 @@ class PatchEmbed1D(nn.Module):
         self.seq_length = seq_length  # sequence length ex. 4500
         self.patch_size = patch_size  # patch size ex.10 or 20
         self.num_patches = num_patches  
-
-        self.proj = nn.Sequential(
-            Rearrange(
+        self.mask = mask
+    
+        self.rearrange = Rearrange(
                 "b c (l p) -> b l (p c)",  
                 p=patch_size
-            ),
-            nn.Linear(patch_size * in_chans, embed_dim) 
-        )
+            )
+
+        
+        self.linear = nn.Linear(patch_size * in_chans, embed_dim) 
+        self.mask_generator = torch.Generator()
+
 
     def forward(self, x):
-        x = self.proj(x)  # [B, num_patches, embed_dim]
-        return x  # output: [B, num_patches, embed_dim]
+        x_patch = self.rearrange(x)
+        x_mask = torch.ones_like(x_patch)
+        
+        if self.mask:
+            x, x_mask = self.mask_tokens(x_patch)
+        else:
+            x = x_patch
+            
+        x = self.linear(x)
+
+        if self.mask:
+            return x, x_patch, x_mask
+        
+        return x, x_patch, x_mask
+
+
+    def mask_tokens(self, x, mask_ratio = 0.5, ):
+        """Corrupt 50% of patch embeddings by replacing with 0 (80%), random values between 0 and 1 (10%), or keeping original values (10%).
+           Return x (masked input) and x_mask (masking info with -100 for masked positions).
+        """
+        
+    
+        self.mask_generator.manual_seed(random.randint(0, 10000))
+        
+        batch_size, num_patches, _ = x.size()
+        total_patches = batch_size * num_patches
+        num_mask = int(mask_ratio * total_patches)  
+    
+        
+        # Generate random indices for patches to mask across the entire batch
+        mask_indices = torch.randperm(total_patches, generator=self.mask_generator)[:num_mask]#.to(x).long()
+    
+        
+        # Flatten x to make indexing easier for masking
+        x_flat = x.view(-1, x.size(-1))
+        x_mask_flat = torch.ones_like(x_flat) 
+        x_mask_flat[mask_indices] = -100
+        
+        
+        
+        # Randomly determine the type of masking for each selected patch
+        rand = torch.rand(num_mask, generator=self.mask_generator) 
+
+        
+        # 80% of the time, replace with 0 
+        mask_0 = rand < 0.8
+       
+        x_flat[mask_indices[mask_0]] = 0
+    
+        
+        # 10% of the time, replace with a random value between 0 and 1 
+        mask_random = ((rand >= 0.8) & (rand < 0.9))
+        x_flat[mask_indices[mask_random]] = torch.rand(x_flat[mask_indices[mask_random]].shape, generator=self.mask_generator).to(x)
+    
+        
+        # Reshape back to the original dimensions
+        x = x_flat.view(batch_size, num_patches, -1)
+        x_mask = x_mask_flat.view(batch_size, num_patches, -1)
+        
+        return x, x_mask
+    
+    
 
 
 
@@ -210,6 +275,7 @@ class VisionTransformer1D(nn.Module):
         norm_layer=None,
         add_norm_before_transformer=False,
         mpp_ratio=0.15,
+        mask = False,
     ):
         
         """
@@ -234,15 +300,17 @@ class VisionTransformer1D(nn.Module):
 
         self.in_chans = in_chans
         self.mpp_ratio = mpp_ratio
-
+        self.mask = mask
+        
         norm_layer = norm_layer or partial(nn.LayerNorm, eps=1e-6)
         self.add_norm_before_transformer = add_norm_before_transformer
-
+        
         self.patch_embed = PatchEmbed1D(
             seq_length=seq_length,
             patch_size=patch_size,
             in_chans=in_chans,
             embed_dim=embed_dim,
+            mask = self.mask,
         )
         num_patches = self.patch_embed.num_patches
 
@@ -251,6 +319,7 @@ class VisionTransformer1D(nn.Module):
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
+        
 
         if add_norm_before_transformer:
             self.pre_norm = norm_layer(embed_dim)
@@ -290,34 +359,15 @@ class VisionTransformer1D(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def mask_tokens(self, orig_seq, feats, patch_size, mpp_ratio):
-        """
-        Prepare masked tokens inputs/labels for masked patch prediction: 80% MASK, 10% random, 10% original.
-        """
-        avgpool = AvgPool1d(patch_size)
-        with torch.no_grad():
-            seq_patch = avgpool(orig_seq)
-        
-        labels = seq_patch.permute(0, 2, 1).contiguous()
-        
-        
-        
-        probability_matrix = torch.full(labels.shape[:-1], mpp_ratio)
-        masked_indices = torch.bernoulli(probability_matrix).bool()
-        labels[~masked_indices] = -100 
 
-        return feats, labels
 
-    def forward(self, x, mask_it=False):
+    def forward(self, x ):
         B, _, _ = x.shape
-        x = self.patch_embed(x)  # [B, num_patches, embed_dim]
+        
 
-        if mask_it:
-            x, label = self.mask_tokens(x, x, self.patch_size, self.mpp_ratio)
-            label = torch.cat(
-                [torch.full((label.shape[0], 1, self.in_chans), -100).to(label), label],
-                dim=1,
-            )
+        x, x_patch, x_mask = self.patch_embed(x)
+        
+
 
         cls_token = self.cls_token.expand(B, -1, -1)
         x = torch.cat([cls_token, x], dim=1)
@@ -327,11 +377,10 @@ class VisionTransformer1D(nn.Module):
         if self.add_norm_before_transformer:
             x = self.pre_norm(x)
 
-        x_mask = torch.ones(x.shape[:2]).to(x)  # [B, ph*pw*pd]
+          # [B, ph*pw*pd]
 
-        if mask_it:
-            return x, x_mask, label
-        else:
-            return x, x_mask, None
+
+        return x, x_patch, x_mask 
+
 
 

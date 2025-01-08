@@ -15,7 +15,7 @@ class BasicDataset(Dataset):
         """
         Dataset for pretrained MOF.
         Args:
-            data_dir (str): where data_dir(.pkl) for xrd, sa (surface area), pv (pore volume), and mofid ; 
+            data_dir (str): where data_dir(.pkl) for xrd,  vf (void fraction), and mofid ; 
         """
         super().__init__()
         self.data_dir = data_dir
@@ -28,14 +28,13 @@ class BasicDataset(Dataset):
 
         with open(self.data_dir, "rb") as h:
             data_list = pickle.load(h)
-        self.xrd, self.miller, self.miller_class, self.pv, self.mofid, self.name, self.ref =\
-        zip(*[(np.expand_dims(item['xrd'], axis=0), item['miller'], item['miller_class'], item['pv'], item['mofid'], item['name'], item['ref']) for item in data_list])
+        self.xrd, self.vf, self.mofid, self.name, self.ref =\
+        zip(*[(np.expand_dims(item['xrd'], axis=0),  item['vf'], item['mofid'], item['name'], item['ref']) for item in data_list])
         self.xrd = np.array(self.xrd)
-        self.pv = np.array(self.pv)
+        self.vf = np.array(self.vf)
         self.xrd = torch.tensor(self.xrd, dtype=torch.float32)
-        #self.sa = torch.tensor(self.sa, dtype=torch.float32)
-        self.pv = torch.tensor(self.pv, dtype=torch.float32)
-        self.miller_class = torch.tensor(self.miller_class)
+        self.vf = torch.tensor(self.vf, dtype=torch.float32)
+        #self.cell_params = torch.tensor(self.cell_params, dtype=torch.float32)
 
         self.tokens, self.attention_mask = self.get_tokens(self.mofid)
 
@@ -48,12 +47,12 @@ class BasicDataset(Dataset):
         results.update(
             {
                 "xrd": self.xrd[index],
-                "miller_class" : self.miller_class[index],
-                "pv": self.pv[index],
+                
+                "vf": self.vf[index],
                 "mofid": self.mofid[index],
                 "input_ids": self.tokens[index],
                 "attention_mask": self.attention_mask[index]
-                
+
                 #"name": self.name[index],
                 #"ref": self.ref[index],
                 #"sa": self.sa[index],

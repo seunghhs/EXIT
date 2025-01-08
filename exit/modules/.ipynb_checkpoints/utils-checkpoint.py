@@ -27,7 +27,7 @@ def set_metrics(pl_module):
         for k, v in pl_module.hparams.config["loss_names"].items():
             if v < 1:
                 continue
-            if k in ['regression', 'pv', 'sa', ]:
+            if k in ['regression', 'vf', 'xrd' ]:
                 setattr(pl_module, f"{split}_{k}_loss", Scalar())
                 setattr(pl_module, f"{split}_{k}_mae", Scalar())
                 setattr(pl_module, f"{split}_{k}_r2", Scalar())
@@ -37,9 +37,9 @@ def set_metrics(pl_module):
 
                 
 #===================== loss =====================
-def compute_pv_loss(module, results, normalizer):
-    logits = module.pv_head(results['cls_feats'])
-    labels = (results['pv']).to(logits.device)
+def compute_vf_loss(module, results, normalizer):
+    logits = module.vf_head(results['cls_feats'])
+    labels = (results['vf']).to(logits.device)
 
      # normalize encode if config["mean"] and config["std], else pass
     logits = logits.squeeze(-1)
@@ -50,26 +50,26 @@ def compute_pv_loss(module, results, normalizer):
     logits = logits.to(torch.float32)
 
     results =  {
-        'pv_loss': loss,
-        'pv_logits': normalizer.decode(logits), 
-       'pv_labels':  normalizer.decode(labels),
+        'vf_loss': loss,
+        'vf_logits': normalizer.decode(logits), 
+       'vf_labels':  normalizer.decode(labels),
            }
 
     # call update() loss and acc
     phase = "train" if module.training else "val"
-    loss = getattr(module, f"{phase}_pv_loss")(results["pv_loss"])
-    mae = getattr(module, f"{phase}_pv_mae")(
-        mean_absolute_error(results["pv_logits"], results["pv_labels"])
+    loss = getattr(module, f"{phase}_vf_loss")(results["vf_loss"])
+    mae = getattr(module, f"{phase}_vf_mae")(
+        mean_absolute_error(results["vf_logits"], results["vf_labels"])
     )
     
-    r2 = getattr(module, f"{phase}_pv_r2")(
-        r2_score(results["pv_logits"], results["pv_labels"])
+    r2 = getattr(module, f"{phase}_vf_r2")(
+        r2_score(results["vf_logits"], results["vf_labels"])
     )
 
     if module.write_log:
-        module.log(f"pv/{phase}/loss", loss, on_step=False, on_epoch=True,sync_dist=True)
-        module.log(f"pv/{phase}/mae", mae, on_step=False, on_epoch=True, sync_dist=True)
-        module.log(f"pv/{phase}/r2", r2, on_step=False, on_epoch=True, sync_dist=True)
+        module.log(f"vf/{phase}/loss", loss, on_step=False, on_epoch=True,sync_dist=True)
+        module.log(f"vf/{phase}/mae", mae, on_step=False, on_epoch=True, sync_dist=True)
+        module.log(f"vf/{phase}/r2", r2, on_step=False, on_epoch=True, sync_dist=True)
 
     return results
 
@@ -150,34 +150,41 @@ def compute_mofid_loss(module, results):
 
 
 
-def compute_miller_loss(module, results):
+def compute_xrd_loss(module, results, ):
 
-    logits = module.miller_head(
-        results["cls_feats"]
-    )  # [B, output_dim]
-    labels = (results["miller_class"]).to(logits.device).long()  # [B]
-    assert len(labels.shape) == 1
+    logits = module.xrd_head(results['xrd_feats'][:,1:,:])
+    labels = (results['xrd_patches']).to(logits.device)
+    masks = (results["xrd_masks"]==-100).to(logits.device)
+    
+    labels = labels[masks]
+    logits = logits[masks]
+    
+    loss = F.mse_loss(logits, labels)
+    
+    labels = labels.to(torch.float32)
+    logits = logits.to(torch.float32)
 
-    loss = F.cross_entropy(logits, labels)
-
-    results = {
-        "miller_loss": loss,
-        "miller_logits": logits,
-        "miller_labels": labels,
-    }
+    results =  {
+        'xrd_loss': loss,
+        'xrd_logits': logits, 
+       'xrd_labels':  labels,
+           }
 
     # call update() loss and acc
     phase = "train" if module.training else "val"
-    loss = getattr(module, f"{phase}_miller_loss")(
-        results["miller_loss"]
-    )                                                                                                                                                                                                                                                                                                                                                                                                              
-    acc = getattr(module, f"{phase}_miller_accuracy")(
-        results["miller_logits"], results["miller_labels"]
+    loss = getattr(module, f"{phase}_xrd_loss")(results["xrd_loss"])
+    mae = getattr(module, f"{phase}_xrd_mae")(
+        mean_absolute_error(results["xrd_logits"], results["xrd_labels"])
+    )
+    r2 = getattr(module, f"{phase}_xrd_r2")(
+        r2_score(results["xrd_logits"], results["xrd_labels"])
     )
 
     if module.write_log:
-        module.log(f"miller/{phase}/loss", loss, on_step=False, on_epoch=True,sync_dist=True)
-        module.log(f"miller/{phase}/accuracy", acc, on_step=False, on_epoch=True, sync_dist=True)
+        module.log(f"xrd/{phase}/loss", loss, on_step=False,  on_epoch=True, sync_dist=True)
+        module.log(f"xrd/{phase}/mae", mae, on_step=False, on_epoch=True, sync_dist=True) 
+        module.log(f"xrd/{phase}/r2", r2, on_step=False, on_epoch=True, sync_dist=True) 
+
 
     return results
 
@@ -207,14 +214,14 @@ def compute_regression_loss(module, results, normalizer):
     mae = getattr(module, f"{phase}_regression_mae")(
         mean_absolute_error(results["regression_logits"], results["regression_labels"])
     )
-    r2 = getattr(module, f"{phase}_regression_r2")(
-        r2_score(results["regression_logits"], results["regression_labels"])
-    )
+    # r2 = getattr(module, f"{phase}_regression_r2")(
+    #     r2_score(results["regression_logits"], results["regression_labels"])
+    # )
 
     if module.write_log:
         module.log(f"regression/{phase}/loss", loss, on_step=False, on_epoch=True, sync_dist=True)
         module.log(f"regression/{phase}/mae", mae, on_step=False, on_epoch=True, sync_dist=True) 
-        module.log(f"regression/{phase}/r2", r2, on_step=False, on_epoch=True,sync_dist=True) 
+        #module.log(f"regression/{phase}/r2", r2, on_step=False, on_epoch=True,sync_dist=True) 
 
     return results
 
@@ -320,7 +327,7 @@ def epoch_wrapup(pl_module):
         if v < 1:
             continue
 
-        if loss_name in ["regression" , 'pv', 'sa', ]:
+        if loss_name in ["regression" , 'vf', 'xrd']:
             # mse 
             tmp_loss = getattr(pl_module, f"{phase}_{loss_name}_loss").compute()
             pl_module.log(
