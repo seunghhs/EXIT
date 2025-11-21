@@ -21,7 +21,7 @@ class MultiModal(LightningModule):
     def __init__(self, config):
         super().__init__()
         self.save_hyperparameters()
-
+        self.name = config.get('name', 'exit')
         self.ntoken = config['model']['ntoken']
         self.visualize = config['visualize']
         self.hidden_dim = config['model']['hidden_dim']
@@ -65,6 +65,15 @@ class MultiModal(LightningModule):
             self.classification_head.apply(init_weights)
             self.current_tasks.append('classification')
 
+        if config.get("exp", False) and config["loss_names"]["regression"] > 0:
+
+            self.regression_head = heads.RegressionHeadExp(self.hidden_dim)
+            self.regression_head.apply(init_weights)
+            self.current_tasks.append('regression')
+            self.regression_mean = config['regression_mean']
+            self.regression_std = config['regression_std'] 
+            
+        
         self.weighted_ratio = {
             task: config.get(f'{task}_weight', 1)  # Example: Get 'sa_weight' if it exists, set it to 1 if not.
             for task in self.current_tasks
@@ -295,6 +304,8 @@ class MultiModal(LightningModule):
             mae = mean_absolute_error(np.array(self.test_labels), np.array(self.test_logits))
             self.log(f"test/r2_score", r2, sync_dist=True)
             self.log(f"test/mae", mae, sync_dist=True )
+            np.save(f'{self.name}_test_label.npy', np.array(self.test_labels))
+            np.save(f'{self.name}_test_logit.npy', np.array(self.test_logits))
             self.test_labels.clear()
             self.test_logits.clear()
 

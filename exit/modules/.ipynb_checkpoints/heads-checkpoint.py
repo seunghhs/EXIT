@@ -66,6 +66,23 @@ class MOFidHead(nn.Module):
         return x
 
 
+class RegressionHeadExp(nn.Module):
+    """
+    head for Regression Experiments
+    """
+
+    def __init__(self, hid_dim, n_targets=1):
+        super().__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(hid_dim, hid_dim // 2),
+            nn.BatchNorm1d(hid_dim // 2),
+            nn.ReLU(),
+            nn.Linear(hid_dim // 2, n_targets)
+        )
+
+    def forward(self, x):
+        return self.fc(x)
+
 class RegressionHead(nn.Module):
     """
     head for Regression
