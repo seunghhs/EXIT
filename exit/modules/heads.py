@@ -75,7 +75,6 @@ class RegressionHeadExp(nn.Module):
         super().__init__()
         self.fc = nn.Sequential(
             nn.Linear(hid_dim, hid_dim // 2),
-            nn.BatchNorm1d(hid_dim // 2),
             nn.ReLU(),
             nn.Linear(hid_dim // 2, n_targets)
         )
@@ -101,7 +100,7 @@ class ClassificationHead(nn.Module):
     head for Classification
     """
 
-    def __init__(self, hid_dim, n_classes):
+    def __init__(self, hid_dim, n_classes=2):
         super().__init__()
 
         if n_classes == 2:

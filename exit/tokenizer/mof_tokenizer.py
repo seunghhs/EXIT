@@ -8,8 +8,8 @@ from logging import getLogger
 
 logger = getLogger(__name__)
 module_dir = os.path.dirname(__file__)
-vocab_path = module_dir + '/vocab_full.txt'
-SMI_REGEX_PATTERN = "(\[[^\]]+]|Br?|Cl?|N|O|S|P|F|I|b|c|n|o|s|p|\(|\)|\.|=|#|-|\+|\\|\/|:|~|@|\?|>>?|\*|\$|\%[0-9]{2}|[0-9]+)"
+vocab_path = module_dir + '/vocab_new.txt'
+SMI_REGEX_PATTERN = "(\[[^\]]+]|Br?|Cl?|N|O|S|P|F|I|b|c|n|o|s|p|\(|\)|\.|=|#|-|\+|\\|\/|:|~|@|\?|>>?|\*|\$|\%[0-9]+|[0-9])"
 
 class MOFTokenizer(BertTokenizer):
   def __init__(
@@ -41,6 +41,24 @@ class MOFTokenizer(BertTokenizer):
     
     self.init_kwargs["max_len"] = self.max_len
 
+    # Special tokens are excluded from meta tokenization.
+    self.special_tokens_set = {
+        self.pad_token,
+        self.cls_token,
+        self.sep_token,
+        self.mask_token,
+        self.unk_token,
+    }
+
+    # Sort only non-special tokens from vocab in descending order of length
+    # (for longest-match)
+    self._meta_tokens_sorted = sorted(
+        [t for t in self.vocab_list if t not in self.special_tokens_set],
+        key=len,
+        reverse=True,
+    )
+
+    
   @property
   def vocab_size(self):
     return len(self.vocab)
@@ -50,10 +68,66 @@ class MOFTokenizer(BertTokenizer):
     return list(self.vocab.keys())
 
   def _tokenize(self, text: str):
-    smiles = text 
-    smiles_tokens = [token for token in self.basic_tokenizer.tokenize(smiles)]
-    return smiles_tokens
 
+    # When received the entire MOFID:
+    # 1) Before "&&" : SMILES (regex-based)
+    # 2) After "&&" : vocab-based
+      
+    if "&&" not in text:
+
+        smiles_tokens = [token for token in self.basic_tokenizer.tokenize(text)]
+        return smiles_tokens
+
+    # separate "SMILES && meta" 
+    smiles_part, meta_part = text.split("&&", 1)
+
+    tokens = []
+
+    # 1) SMILES:  regex
+    if smiles_part:
+        tokens.extend(self.basic_tokenizer.tokenize(smiles_part))
+
+    # 2) "&&"  (assume "&&" in vocab)
+    tokens.append("&&")
+
+    # 3) meta: vocab-based longest-match tokenize
+    if meta_part:
+        meta_part = meta_part.replace("-", "")
+        tokens.extend(self._tokenize_meta(meta_part))
+
+    return tokens
+
+  def _tokenize_meta(self, text: str):
+    """
+    Tokenize the metastring after '&&' using the longest-match method, matching it to the vocab.
+    - Left-to-right scan based on the tokens in vocab_full.txt
+    - If no prefix matches, fallback to a single-char (in this case, if not in the vocab, it is mapped to [UNK]).
+    """
+    tokens = []
+    i = 0
+    n = len(text)
+
+    while i < n:
+      matched = False
+
+      # Check the longest tokens in vocab first
+      for tok in self._meta_tokens_sorted:
+        if text.startswith(tok, i):
+          tokens.append(tok)
+          i += len(tok)
+          matched = True
+          break
+
+      if not matched:
+        # If no vocab token matches, split it into individual characters.
+        # (If a character is not in the vocab, it will be mapped to the [UNK] id later.)
+        tokens.append(text[i])
+        i += 1
+
+    return tokens
+
+
+    
   def _convert_token_to_id(self, token):
     """
         Converts a token (str/unicode) in an id using the vocab.
@@ -92,7 +166,7 @@ class MOFTokenizer(BertTokenizer):
             Single string from combined tokens.
         """
 
-    out_string: str = " ".join(tokens).replace(" ##", "").strip()
+    out_string: str = "".join(tokens).strip()
     return out_string
 
   def add_special_tokens_ids_single_sequence(self, token_ids: List[int]):

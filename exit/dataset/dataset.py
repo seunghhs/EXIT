@@ -26,8 +26,10 @@ class BasicDataset(Dataset):
                 f"{self.data_dir} doesn't exist"
             )
 
+
         with open(self.data_dir, "rb") as h:
             data_list = pickle.load(h)
+                
         self.xrd, self.vf, self.mofid, self.name, self.ref =\
         zip(*[(np.expand_dims(item['xrd'], axis=0),  item['vf'], item['mofid'], item['name'], item['ref']) for item in data_list])
         self.xrd = np.array(self.xrd)

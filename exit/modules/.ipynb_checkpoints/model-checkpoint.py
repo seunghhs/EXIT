@@ -173,6 +173,10 @@ class MultiModal(LightningModule):
         
             if self.vis:
                 attn_weights.append(_attn)
+
+        if self.vis and len(attn_weights) > 0:
+            # [num_layers, B, heads, L, L]
+            attn_weights = torch.stack(attn_weights, dim=0).detach().cpu()
         
         x = self.vision_transformer.norm(x)
         cls_feats = self.pooler(x)

@@ -8,13 +8,10 @@ from logging import getLogger
 
 logger = getLogger(__name__)
 module_dir = os.path.dirname(__file__)
-vocab_path = module_dir + '/vocab_full.txt'
-SMI_REGEX_PATTERN = "(\[[^\]]+]|Br?|Cl?|N|O|S|P|F|I|b|c|n|o|s|p|\(|\)|\.|=|#|-|\+|\\|\/|:|~|@|\?|>>?|\*|\$|\%[0-9]{2}|[0-9]+)"
+vocab_path = module_dir + '/vocab_new.txt'
+SMI_REGEX_PATTERN = "(\[[^\]]+]|Br?|Cl?|N|O|S|P|F|I|b|c|n|o|s|p|\(|\)|\.|=|#|-|\+|\\|\/|:|~|@|\?|>>?|\*|\$|\%[0-9]+|[0-9])"
 
 class MOFTokenizer(BertTokenizer):
-  #vocab_files_names = VOCAB_FILES_NAMES
-  
-
   def __init__(
       self,
       vocab_file: str = vocab_path,
@@ -24,31 +21,44 @@ class MOFTokenizer(BertTokenizer):
       # cls_token="[CLS]",
       # mask_token="[MASK]",
       **kwargs):
-    """Constructs a SmilesTokenizer.
-
-        Parameters
-        ----------
-        vocab_file: str
-            Path to a SMILES character per line vocabulary file.
-            Default vocab file is found in deepchem/feat/tests/data/vocab.txt
-        """
-
+    
     super().__init__(vocab_file, **kwargs)
-    # take into account special tokens in max length
     self.max_len = self.model_max_length
 
     if not os.path.isfile(vocab_file):
       raise ValueError(
           "Can't find a vocab file at path '{}'.".format(vocab_file))
+      
     self.vocab = load_vocab(vocab_file)
+    
     self.highest_unused_index = max(
         [i for i, v in enumerate(self.vocab.keys()) if v.startswith("[unused")])
+    
     self.ids_to_tokens = collections.OrderedDict(
         [(ids, tok) for tok, ids in self.vocab.items()])
+    
     self.basic_tokenizer = BasicSmilesTokenizer(regex_pattern=SMI_REGEX_PATTERN)
-    self.topo_tokenizer = TopoTokenizer()
+    
     self.init_kwargs["max_len"] = self.max_len
 
+    # Special tokens are excluded from meta tokenization.
+    self.special_tokens_set = {
+        self.pad_token,
+        self.cls_token,
+        self.sep_token,
+        self.mask_token,
+        self.unk_token,
+    }
+
+    # Sort only non-special tokens from vocab in descending order of length
+    # (for longest-match)
+    self._meta_tokens_sorted = sorted(
+        [t for t in self.vocab_list if t not in self.special_tokens_set],
+        key=len,
+        reverse=True,
+    )
+
+    
   @property
   def vocab_size(self):
     return len(self.vocab)
@@ -58,21 +68,66 @@ class MOFTokenizer(BertTokenizer):
     return list(self.vocab.keys())
 
   def _tokenize(self, text: str):
+
+    # When received the entire MOFID:
+    # 1) Before "&&" : SMILES (regex-based)
+    # 2) After "&&" : vocab-based
+      
+    if "&&" not in text:
+
+        smiles_tokens = [token for token in self.basic_tokenizer.tokenize(text)]
+        return smiles_tokens
+
+    # separate "SMILES && meta" 
+    smiles_part, meta_part = text.split("&&", 1)
+
+    tokens = []
+
+    # 1) SMILES:  regex
+    if smiles_part:
+        tokens.extend(self.basic_tokenizer.tokenize(smiles_part))
+
+    # 2) "&&"  (assume "&&" in vocab)
+    tokens.append("&&")
+
+    # 3) meta: vocab-based longest-match tokenize
+    if meta_part:
+        meta_part = meta_part.replace("-", "")
+        tokens.extend(self._tokenize_meta(meta_part))
+
+    return tokens
+
+  def _tokenize_meta(self, text: str):
     """
-        Tokenize a string into a list of tokens.
+    Tokenize the metastring after '&&' using the longest-match method, matching it to the vocab.
+    - Left-to-right scan based on the tokens in vocab_full.txt
+    - If no prefix matches, fallback to a single-char (in this case, if not in the vocab, it is mapped to [UNK]).
+    """
+    tokens = []
+    i = 0
+    n = len(text)
 
-        Parameters
-        ----------
-        text: str
-            Input string sequence to be tokenized.
-        """
-    smiles, topo = text.split('&&')
-    smiles_tokens = [token for token in self.basic_tokenizer.tokenize(smiles)]
-    topo_tokens = self.topo_tokenizer.tokenize(topo)
-    # split_tokens = [token for token in self.basic_tokenizer.tokenize(text)]
-    split_tokens = smiles_tokens+['&&']+topo_tokens
-    return split_tokens
+    while i < n:
+      matched = False
 
+      # Check the longest tokens in vocab first
+      for tok in self._meta_tokens_sorted:
+        if text.startswith(tok, i):
+          tokens.append(tok)
+          i += len(tok)
+          matched = True
+          break
+
+      if not matched:
+        # If no vocab token matches, split it into individual characters.
+        # (If a character is not in the vocab, it will be mapped to the [UNK] id later.)
+        tokens.append(text[i])
+        i += 1
+
+    return tokens
+
+
+    
   def _convert_token_to_id(self, token):
     """
         Converts a token (str/unicode) in an id using the vocab.
@@ -111,7 +166,7 @@ class MOFTokenizer(BertTokenizer):
             Single string from combined tokens.
         """
 
-    out_string: str = " ".join(tokens).replace(" ##", "").strip()
+    out_string: str = "".join(tokens).strip()
     return out_string
 
   def add_special_tokens_ids_single_sequence(self, token_ids: List[int]):
@@ -271,56 +326,6 @@ class BasicSmilesTokenizer(object):
     """ Basic Tokenization of a SMILES.
         """
     tokens = [token for token in self.regex.findall(text)]
-    return tokens
-
-
-def load_vocab(vocab_file):
-  """Loads a vocabulary file into a dictionary."""
-  vocab = collections.OrderedDict()
-  with open(vocab_file, "r", encoding="utf-8") as reader:
-    tokens = reader.readlines()
-  for index, token in enumerate(tokens):
-    token = token.rstrip("\n")
-    vocab[token] = index
-  return vocab
-
-class TopoTokenizer(object):
-  """
-
-  Run basic SMILES tokenization using a regex pattern developed by Schwaller et. al. This tokenizer is to be used
-  when a tokenizer that does not require the transformers library by HuggingFace is required.
-
-  Examples
-  --------
-  >>> from deepchem.feat.smiles_tokenizer import BasicSmilesTokenizer
-  >>> tokenizer = BasicSmilesTokenizer()
-  >>> print(tokenizer.tokenize("CC(=O)OC1=CC=CC=C1C(=O)O"))
-  ['C', 'C', '(', '=', 'O', ')', 'O', 'C', '1', '=', 'C', 'C', '=', 'C', 'C', '=', 'C', '1', 'C', '(', '=', 'O', ')', 'O']
-
-
-  References
-  ----------
-  .. [1]  Philippe Schwaller, Teodoro Laino, Théophile Gaudin, Peter Bolgar, Christopher A. Hunter, Costas Bekas, and Alpha A. Lee
-          ACS Central Science 2019 5 (9): Molecular Transformer: A Model for Uncertainty-Calibrated Chemical Reaction Prediction
-          1572-1583 DOI: 10.1021/acscentsci.9b00576
-
-  """
-
-  def __init__(self):
-    return
-
-  def tokenize(self, text):
-    """ Basic Tokenization of a SMILES.
-        """
-    topo_cat = text.split('.')
-    if len(topo_cat)<2:
-      topos = topo_cat[0]
-      topos = topos.split(',')
-      tokens = topos
-    else:
-      topos, cat = topo_cat[0], topo_cat[1]
-      topos = topos.split(',')
-      tokens = topos + [cat]
     return tokens
 
 

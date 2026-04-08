@@ -75,7 +75,6 @@ class RegressionHeadExp(nn.Module):
         super().__init__()
         self.fc = nn.Sequential(
             nn.Linear(hid_dim, hid_dim // 2),
-            nn.BatchNorm1d(hid_dim // 2),
             nn.ReLU(),
             nn.Linear(hid_dim // 2, n_targets)
         )

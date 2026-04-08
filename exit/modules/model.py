@@ -61,7 +61,7 @@ class MultiModal(LightningModule):
             self.regression_std = config['regression_std']             
 
         if config["loss_names"]["classification"] > 0:
-            self.classification_head = heads.ClassificationHead(self.hidden_dim)
+            self.classification_head = heads.ClassificationHead(self.hidden_dim, n_classes = config.get('n_classes', 2))
             self.classification_head.apply(init_weights)
             self.current_tasks.append('classification')
 
@@ -88,6 +88,8 @@ class MultiModal(LightningModule):
         self.vf_test_labels = []
         self.xrd_test_logits = []
         self.xrd_test_labels = []
+        self.class_logits = []
+        self.class_labels = []
 
         # set vision transformer
         self.vision_transformer = VisionTransformer1D(
@@ -173,6 +175,10 @@ class MultiModal(LightningModule):
         
             if self.vis:
                 attn_weights.append(_attn)
+
+        if self.vis and len(attn_weights) > 0:
+            # [num_layers, B, heads, L, L]
+            attn_weights = torch.stack(attn_weights, dim=0).detach().cpu()
         
         x = self.vision_transformer.norm(x)
         cls_feats = self.pooler(x)
@@ -199,8 +205,8 @@ class MultiModal(LightningModule):
 
 
         # calculate losses
-        loss_dict = self.get_loss(results)
-        results.update(loss_dict)
+        # loss_dict = self.get_loss(results)
+        # results.update(loss_dict)
         
         return results
 
@@ -291,7 +297,9 @@ class MultiModal(LightningModule):
             self.xrd_test_logits += output["xrd_logits"].tolist()
             self.xrd_test_labels += output["xrd_labels"].tolist()            
             
-        
+        if "classification_logits" in output.keys():
+            self.class_logits += output["classification_logits"].tolist()
+            self.class_labels += output["classification_labels"].tolist()        
             
         return output
 
@@ -308,6 +316,26 @@ class MultiModal(LightningModule):
             np.save(f'{self.name}_test_logit.npy', np.array(self.test_logits))
             self.test_labels.clear()
             self.test_logits.clear()
+
+        if len(self.class_logits) > 1:
+            class_logits = np.array(self.class_logits)
+            class_labels = np.array(self.class_labels)
+            
+            # Convert logits to predicted class indices
+            if len(class_logits.shape) > 1:
+                # Multi-class: argmax to get predicted class
+                pred_classes = np.argmax(class_logits, axis=-1)
+            else:
+                # Binary: threshold at 0.5
+                pred_classes = (class_logits >= 0.5).astype(int)
+            
+            acc = accuracy_score(class_labels, pred_classes)
+            self.log(f"test/acc", acc, sync_dist=True)
+ 
+            np.save(f'{self.name}_test_label.npy', class_labels)
+            np.save(f'{self.name}_test_logit.npy', class_logits)
+            self.class_labels.clear()
+            self.class_logits.clear()
 
         if len(self.vf_test_logits) > 1:
             r2 = r2_score(np.array(self.vf_test_labels), np.array(self.vf_test_logits))

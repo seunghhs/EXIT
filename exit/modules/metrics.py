@@ -9,27 +9,21 @@ class Accuracy(Metric):
         self.add_state("total", default=torch.tensor(0.0), dist_reduce_fx="sum")
 
     def update(self, logits, target):
-        logits, target = (
-            logits.detach().to(self.correct.device),
-            target.detach().to(self.correct.device),
-        )
+        logits = logits.detach().to(self.correct.device)
+        target = target.detach().to(self.correct.device)
+
         if len(logits.shape) > 1:
             preds = logits.argmax(dim=-1)
         else:
             # binary accuracy
-            logits[logits >= 0.5] = 1
-            logits[logits < 0.5] = 0
-            preds = logits
-
-        #preds = preds[target != -100]
-        #target = target[target != -100]
+            preds = (logits >= 0.5).to(target.dtype)
 
         if target.numel() == 0:
-            return 1
+            return
 
         assert preds.shape == target.shape
 
-        self.correct += torch.sum(preds == target)
+        self.correct += (preds == target).sum()
         self.total += target.numel()
 
     def compute(self):

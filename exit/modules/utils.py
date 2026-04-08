@@ -225,40 +225,87 @@ def compute_regression_loss(module, results, normalizer):
 
     return results
 
-
 def compute_classification_loss(module, results):
+    logits, binary = module.classification_head(results["cls_feats"])
+    labels = results["classification"].to(logits.device)
+    assert labels.ndim == 1
 
-    logits, binary = module.classification_head(
-        results["cls_feats"]
-    )  # [B, output_dim]
-    labels = (results["classification"]).to(logits.device)  # [B]
-    assert len(labels.shape) == 1
     if binary:
-        logits = logits.squeeze(dim=-1)
-        loss = F.binary_cross_entropy_with_logits(input=logits, target=labels.float())
+        logits = logits.squeeze(dim=-1).contiguous().clone()
+        cls_loss = F.binary_cross_entropy_with_logits(
+            input=logits,
+            target=labels.float(),
+        )
     else:
-        loss = F.cross_entropy(logits, labels)
+        cls_loss = F.cross_entropy(logits, labels)
 
-    results = {
-        "classification_loss": loss,
+    output = {
+        "classification_loss": cls_loss,
         "classification_logits": logits,
         "classification_labels": labels,
     }
 
-    # call update() loss and acc
     phase = "train" if module.training else "val"
-    loss = getattr(module, f"{phase}_classification_loss")(
-        results["classification_loss"]
-    )                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
-    acc = getattr(module, f"{phase}_classification_accuracy")(
-        results["classification_logits"], results["classification_labels"]
+
+    # metric update에는 detach해서 넣기
+    metric_loss = getattr(module, f"{phase}_classification_loss")(
+        output["classification_loss"].detach()
+    )
+    metric_acc = getattr(module, f"{phase}_classification_accuracy")(
+        output["classification_logits"].detach(),
+        output["classification_labels"].detach(),
     )
 
     if module.write_log:
-        module.log(f"classification/{phase}/loss", loss, on_step=False, on_epoch=True,sync_dist=True)
-        module.log(f"classification/{phase}/accuracy", acc, on_step=False, on_epoch=True, sync_dist=True)
+        module.log(
+            f"classification/{phase}/loss",
+            metric_loss,
+            on_step=False,
+            on_epoch=True,
+            sync_dist=True,
+        )
+        module.log(
+            f"classification/{phase}/accuracy",
+            metric_acc,
+            on_step=False,
+            on_epoch=True,
+            sync_dist=True,
+        )
 
-    return ret
+    return output
+# def compute_classification_loss(module, results):
+
+#     logits, binary = module.classification_head(
+#         results["cls_feats"]
+#     )  # [B, output_dim]
+#     labels = (results["classification"]).to(logits.device)  # [B]
+#     assert len(labels.shape) == 1
+#     if binary:
+#         logits = logits.squeeze(dim=-1)
+#         loss = F.binary_cross_entropy_with_logits(input=logits, target=labels.float())
+#     else:
+#         loss = F.cross_entropy(logits, labels)
+
+#     results = {
+#         "classification_loss": loss,
+#         "classification_logits": logits,
+#         "classification_labels": labels,
+#     }
+
+#     # call update() loss and acc
+#     phase = "train" if module.training else "val"
+#     loss = getattr(module, f"{phase}_classification_loss")(
+#         results["classification_loss"]
+#     )                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
+#     acc = getattr(module, f"{phase}_classification_accuracy")(
+#         results["classification_logits"], results["classification_labels"]
+#     )
+
+#     if module.write_log:
+#         module.log(f"classification/{phase}/loss", loss, on_step=False, on_epoch=True,sync_dist=True)
+#         module.log(f"classification/{phase}/accuracy", acc, on_step=False, on_epoch=True, sync_dist=True)
+
+#     return results
 #===================== loss =====================
 
 # def epoch_wrapup(pl_module):

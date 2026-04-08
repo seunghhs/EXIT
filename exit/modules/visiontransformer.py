@@ -221,7 +221,7 @@ class PatchEmbed1D(nn.Module):
     
         
         # Flatten x to make indexing easier for masking
-        x_flat = x.view(-1, x.size(-1))
+        x_flat = x.clone().view(-1, x.size(-1))
         x_mask_flat = torch.ones_like(x_flat) 
         x_mask_flat[mask_indices] = -100
         
@@ -371,7 +371,7 @@ class VisionTransformer1D(nn.Module):
 
         cls_token = self.cls_token.expand(B, -1, -1)
         x = torch.cat([cls_token, x], dim=1)
-        x += self.pos_embed
+        x = x +  self.pos_embed
         x = self.pos_drop(x)
 
         if self.add_norm_before_transformer:
