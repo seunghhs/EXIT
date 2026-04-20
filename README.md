@@ -41,8 +41,7 @@ mofid [B, seq_len] ──► MOFidEncoder (embed + pos_enc)       ──► [B, 
 ## Installation
 
 ```bash
-conda activate mosaec   # provides pytorch-lightning, rdkit, transformers, timm, einops
-
+git clone https://github.com/seunghhs/EXIT.git
 cd EXIT
 pip install -e .
 ```
