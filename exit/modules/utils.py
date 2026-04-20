@@ -1,3 +1,7 @@
+"""
+Utilities for the EXIT model: weight initialization, metric setup,
+loss computation, epoch wrapup, optimizer/scheduler configuration, and normalization.
+"""
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -12,7 +16,9 @@ from transformers import (
 )
 from exit.modules.metrics import Accuracy, Scalar
 
+
 def init_weights(module):
+    """Initialize weights with std=0.02 (BERT-style). Zero-init biases and LayerNorm."""
     if isinstance(module, (nn.Linear, nn.Embedding)):
         module.weight.data.normal_(mean=0.0, std=0.02)
     elif isinstance(module, nn.LayerNorm):
@@ -23,11 +29,16 @@ def init_weights(module):
         module.bias.data.zero_()
 
 def set_metrics(pl_module):
+    """
+    Dynamically attach TorchMetrics trackers to the Lightning module based on active tasks.
+    Regression-like tasks (regression, vf, xrd) get loss/mae/r2 scalars;
+    classification-like tasks (mofid, classification) get loss + accuracy.
+    """
     for split in ["train", "val"]:
         for k, v in pl_module.hparams.config["loss_names"].items():
             if v < 1:
                 continue
-            if k in ['regression', 'vf', 'xrd' ]:
+            if k in ['regression', 'vf', 'xrd']:
                 setattr(pl_module, f"{split}_{k}_loss", Scalar())
                 setattr(pl_module, f"{split}_{k}_mae", Scalar())
                 setattr(pl_module, f"{split}_{k}_r2", Scalar())
@@ -75,43 +86,6 @@ def compute_vf_loss(module, results, normalizer):
 
 
 
-def compute_sa_loss(module, results, normalizer):
-    logits = module.sa_head(results['cls_feats'])
-    labels = (results['sa']).to(logits.device)
-
-     # normalize encode if config["mean"] and config["std], else pass
-    logits = logits.squeeze(-1)
-    labels = normalizer.encode(labels)
-    loss = F.mse_loss(logits, labels)
-
-    labels = labels.to(torch.float32)
-    logits = logits.to(torch.float32)
-
-    results =  {
-        'sa_loss': loss,
-        'sa_logits': normalizer.decode(logits), 
-       'sa_labels':  normalizer.decode(labels),
-           }
-
-    # call update() loss and acc
-    phase = "train" if module.training else "val"
-    loss = getattr(module, f"{phase}_sa_loss")(results["sa_loss"])
-    mae = getattr(module, f"{phase}_sa_mae")(
-        mean_absolute_error(results["sa_logits"], results["sa_labels"])
-    )
-    r2 = getattr(module, f"{phase}_sa_r2")(
-        r2_score(results["sa_logits"], results["sa_labels"])
-    )
-
-    if module.write_log:
-        module.log(f"sa/{phase}/loss", loss, on_step=False,  on_epoch=True, sync_dist=True)
-        module.log(f"sa/{phase}/mae", mae, on_step=False, on_epoch=True, sync_dist=True) 
-        module.log(f"sa/{phase}/r2", r2, on_step=False, on_epoch=True, sync_dist=True) 
-
-    return results
-
-
-
 
 def compute_mofid_loss(module, results):
 
@@ -150,11 +124,12 @@ def compute_mofid_loss(module, results):
 
 
 
-def compute_xrd_loss(module, results, ):
-
-    logits = module.xrd_head(results['xrd_feats'][:,1:,:])
+def compute_xrd_loss(module, results):
+    # Skip the CLS token (index 0); only patch tokens [1:] are reconstructed
+    logits = module.xrd_head(results['xrd_feats'][:, 1:, :])
     labels = (results['xrd_patches']).to(logits.device)
-    masks = (results["xrd_masks"]==-100).to(logits.device)
+    # xrd_mask=-100 marks positions that were corrupted and must be reconstructed
+    masks = (results["xrd_masks"] == -100).to(logits.device)
     
     labels = labels[masks]
     logits = logits[masks]
@@ -273,102 +248,25 @@ def compute_classification_loss(module, results):
         )
 
     return output
-# def compute_classification_loss(module, results):
-
-#     logits, binary = module.classification_head(
-#         results["cls_feats"]
-#     )  # [B, output_dim]
-#     labels = (results["classification"]).to(logits.device)  # [B]
-#     assert len(labels.shape) == 1
-#     if binary:
-#         logits = logits.squeeze(dim=-1)
-#         loss = F.binary_cross_entropy_with_logits(input=logits, target=labels.float())
-#     else:
-#         loss = F.cross_entropy(logits, labels)
-
-#     results = {
-#         "classification_loss": loss,
-#         "classification_logits": logits,
-#         "classification_labels": labels,
-#     }
-
-#     # call update() loss and acc
-#     phase = "train" if module.training else "val"
-#     loss = getattr(module, f"{phase}_classification_loss")(
-#         results["classification_loss"]
-#     )                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
-#     acc = getattr(module, f"{phase}_classification_accuracy")(
-#         results["classification_logits"], results["classification_labels"]
-#     )
-
-#     if module.write_log:
-#         module.log(f"classification/{phase}/loss", loss, on_step=False, on_epoch=True,sync_dist=True)
-#         module.log(f"classification/{phase}/accuracy", acc, on_step=False, on_epoch=True, sync_dist=True)
-
-#     return results
-#===================== loss =====================
-
-# def epoch_wrapup(pl_module):
-#     phase = "train" if pl_module.training else "val"
-
-#     the_metric = 0
-
-#     for loss_name, v in pl_module.hparams.config["loss_names"].items():
-#         if v < 1:
-#             continue
-
-#         if loss_name in ["regression" , 'pv', 'sa', ]:
-#             # mse loss
-#             pl_module.log(
-#                 f"{loss_name}/{phase}/loss_epoch",
-#                 getattr(pl_module, f"{phase}_{loss_name}_loss").compute(),
-#                 batch_size=pl_module.hparams["config"]["per_gpu_batchsize"],
-#                 sync_dist=True,
-#             )
-#             getattr(pl_module, f"{phase}_{loss_name}_loss").reset()
-#             # mae loss
-#             value = getattr(pl_module, f"{phase}_{loss_name}_mae").compute()
-#             pl_module.log(
-#                 f"{loss_name}/{phase}/mae_epoch",
-#                 value,
-#                 batch_size=pl_module.hparams["config"]["per_gpu_batchsize"],
-#                 sync_dist=True,
-#             )
-#             getattr(pl_module, f"{phase}_{loss_name}_mae").reset()
-
-#             value = -value
-#         else:
-#             value = getattr(pl_module, f"{phase}_{loss_name}_accuracy").compute()
-#             pl_module.log(
-#                 f"{loss_name}/{phase}/accuracy_epoch",
-#                 value,
-#                 batch_size=pl_module.hparams["config"]["per_gpu_batchsize"],
-#                 sync_dist=True,
-#             )
-#             getattr(pl_module, f"{phase}_{loss_name}_accuracy").reset()
-#             pl_module.log(
-#                 f"{loss_name}/{phase}/loss_epoch",
-#                 getattr(pl_module, f"{phase}_{loss_name}_loss").compute(),
-#                 batch_size=pl_module.hparams["config"]["per_gpu_batchsize"],
-#                 sync_dist=True,
-#             )
-#             getattr(pl_module, f"{phase}_{loss_name}_loss").reset()
-
-#         the_metric += value
-
-#     pl_module.log(f"{phase}/the_metric", the_metric, sync_dist=True)
 
 
 def epoch_wrapup(pl_module):
+    """
+    Called at the end of each train/val epoch to:
+    - Log per-task epoch-level metrics (loss, mae, r2 or accuracy)
+    - Compute and log two aggregate signals used by ModelCheckpoint/EarlyStopping:
+        the_metric   = weighted sum of task losses (lower is better; used in pretrain)
+        the_metric_2 = weighted sum of task performances (higher is better; used in finetune)
+    """
     phase = "train" if pl_module.training else "val"
 
     the_metric = 0
     the_metric_2 = 0
-    
+
     if len(pl_module.trainer.optimizers) > 0:
         for i, param_group in enumerate(pl_module.trainer.optimizers[0].param_groups):
             current_lr = param_group['lr']
-            pl_module.log(f'lr_group_{i}', current_lr,   sync_dist=True)
+            pl_module.log(f'lr_group_{i}', current_lr, sync_dist=True)
     
     for loss_name, v in pl_module.hparams.config["loss_names"].items():
         if v < 1:
@@ -566,7 +464,11 @@ def set_schedule(module):
 
 class Normalizer(object):
     """
-    normalize for regression
+    Z-score normalizer for regression targets.
+
+    If mean/std are provided (non-zero/non-None), applies (x - mean) / std on encode
+    and the inverse on decode. If both are falsy (e.g., None or 0), acts as identity —
+    useful when the dataset is already normalized or normalization is not desired.
     """
 
     def __init__(self, mean, std, device):
@@ -593,30 +495,4 @@ class Normalizer(object):
 
 
 
-###################################
-#############masking###############
-###################################
-def prob_mask_like(t, prob): #t: tensor
-    return torch.zeros_like(t).float().uniform_(0, 1) < prob
-
-def mask_with_tokens(t, token_ids): #t: tensor
-    init_no_mask = torch.full_like(t, False, dtype=torch.bool)
-    mask = reduce(lambda acc, el: acc | (t == el), token_ids, init_no_mask)
-    return mask
-
-def get_mask_subset_with_prob(mask, prob):
-    batch, seq_len, device = *mask.shape, mask.device
-    max_masked = math.ceil(prob * seq_len)
-
-    num_tokens = mask.sum(dim=-1, keepdim=True)
-    mask_excess = (mask.cumsum(dim=-1) > (num_tokens * prob).ceil())
-    mask_excess = mask_excess[:, :max_masked]
-
-    rand = torch.rand((batch, seq_len), device=device).masked_fill(~mask, -1e9)
-    _, sampled_indices = rand.topk(max_masked, dim=-1)
-    sampled_indices = (sampled_indices + 1).masked_fill_(mask_excess, 0)
-
-    new_mask = torch.zeros((batch, seq_len + 1), device=device)
-    new_mask.scatter_(-1, sampled_indices, 1)
-    return new_mask[:, 1:].bool()
 

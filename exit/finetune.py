@@ -1,3 +1,19 @@
+"""
+Finetuning entry point for the EXIT model.
+
+Loads the pretrained EXIT backbone (from resume_from in config) and finetunes on
+experimental MOF datasets for property prediction (surface area or pore volume).
+Uses a 3-way train/valid/test split; no MLM masking is applied during finetuning.
+
+Key differences from pretrain.py:
+- Uses dataset_finetune.py (loads 'regression' field instead of 'vf')
+- mlm=False (no token masking)
+- Monitors val/the_metric_2 (higher is better: negated MAE)
+- Default epoch=20 (vs 100 for pretrain)
+
+Usage:
+    python finetune.py --config config/finetune.yml --devices 1 --epoch 20
+"""
 import os
 import yaml
 import torch
@@ -23,9 +39,9 @@ import pytorch_lightning as pl
 from pytorch_lightning.strategies import DDPStrategy
 
 torch.multiprocessing.set_sharing_strategy("file_system")
-num_workers =16
+num_workers = 16
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["CUDA_LAUNCH_BLOCKING"]="1"
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -67,16 +83,15 @@ if __name__ == '__main__':
     # ckpt 
     ckpt_dir = f'./ckpt_{args.ckpt_dir}/' #{datetime.datetime.now().strftime("%Y-%m-%d")}
     os.makedirs(ckpt_dir, exist_ok=True)
+    # val/the_metric_2 = negated MAE (higher is better), defined in epoch_wrapup()
     checkpoint_callback = ModelCheckpoint(
-        dirpath = ckpt_dir, 
+        dirpath=ckpt_dir,
         verbose=True,
         save_last=True,
         save_top_k=1,
         monitor="val/the_metric_2",
-        #every_n_train_steps=100,
-        #every_n_epochs=1, 
         mode='max'
-    )    
+    )
     seed = config['seed']
     logger = pl.loggers.TensorBoardLogger(
         args.log_dir,
@@ -93,14 +108,15 @@ if __name__ == '__main__':
     
     num_nodes = config['num_nodes']
     
-    if args.devices==0:
+    # gradient accumulation keeps effective batch_size = config['batch_size']
+    if args.devices == 0:
         accumulate_grad_batches = config['batch_size'] // (
             config['per_gpu_batchsize'] * num_nodes
         )
     else:
         accumulate_grad_batches = config['batch_size'] // (
             config['per_gpu_batchsize'] * args.devices * num_nodes
-        )    
+        )
 
     
     log_every_n_steps=10
@@ -125,12 +141,13 @@ if __name__ == '__main__':
                       callbacks=callbacks
                      )   
     
-    # no masking
-    tokenizer = MOFTokenizer(model_max_length = 512, padding_side='right')
+    # mlm=False: no token masking during finetuning — input_ids pass through unchanged,
+    # but the collator still pads and creates the labels field (all -100 = ignored)
+    tokenizer = MOFTokenizer(model_max_length=512, padding_side='right')
     data_collator = DataCollatorForLanguageModeling(
         tokenizer=tokenizer,
         mlm=False
-    )  
+    )
     test_data = BasicDataset(test_data_dir)              
 
     test_loader =DataLoader(test_data, batch_size=config['per_gpu_batchsize'] ,collate_fn=lambda batch: custom_collate_fn(batch, data_collator),

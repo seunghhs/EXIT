@@ -1,3 +1,8 @@
+"""
+Finetuning dataset for classification tasks.
+Loads experimental MOF data (xrd, classification label, mofid) from a pickle file.
+Classification labels must be integer class indices (torch.long).
+"""
 import os
 import pickle
 import numpy as np
@@ -5,17 +10,18 @@ import torch
 from torch.utils.data import Dataset
 from exit.tokenizer.mof_tokenizer import MOFTokenizer
 
-tokenizer = MOFTokenizer(model_max_length = 512, padding_side='right')
+tokenizer = MOFTokenizer(model_max_length=512, padding_side='right')
+
 
 class BasicDataset(Dataset):
-    def __init__(
-        self,
-        data_dir: str,
-    ):
+    def __init__(self, data_dir: str):
         """
-        Dataset for pretrained MOF.
         Args:
-            data_dir (str): where data_dir(.pkl) for xrd, sa (surface area), pv (pore volume), and mofid ; 
+            data_dir: path to .pkl file. Each item must have keys:
+                xrd            (np.ndarray, shape [seq_length])  — XRD pattern
+                classification (int)                             — class label (0-indexed)
+                mofid          (str)                             — MOFid string
+                name           (str), ref (str)                  — identifiers
         """
         super().__init__()
         self.data_dir = data_dir

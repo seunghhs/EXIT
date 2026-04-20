@@ -156,16 +156,27 @@ class Block(nn.Module):
 
 
 class PatchEmbed1D(nn.Module):
-    """XRD to Patch Embedding for 1D"""
+    """
+    Converts a 1D XRD signal into a sequence of patch embeddings.
+
+    The XRD signal (shape [B, 1, seq_length]) is split into non-overlapping patches
+    of length patch_size, then linearly projected to embed_dim.
+
+    When mask=True (XRD reconstruction pretraining), 50% of patches are corrupted:
+      - 80% replaced with zeros
+      - 10% replaced with random values in [0, 1]
+      - 10% kept unchanged
+    Corrupted positions are marked with -100 in the returned x_mask tensor.
+    """
 
     def __init__(
         self,
-        seq_length,  # sequence length  np.arange(5,50,0.01) -> 4500
-        patch_size,  # length of each patch ex. 10 or 20
-        in_chans=1,  # number of input channels (default 1 for 1D data)
-        embed_dim=768,  # dimension of the embedding space
+        seq_length,  # e.g. 4500 for 2θ range 5–50° with step 0.01°
+        patch_size,  # patch length, e.g. 20 → 225 patches
+        in_chans=1,
+        embed_dim=768,
         no_patch_embed_bias=False,
-        mask = False
+        mask=False
     ):
         super().__init__()
 
@@ -253,9 +264,16 @@ class PatchEmbed1D(nn.Module):
 
 
 class VisionTransformer1D(nn.Module):
-    """ Vision Transformer for 1D Data
-    A PyTorch impl of : `An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale`  -
-        https://arxiv.org/abs/2010.11929    
+    """
+    Vision Transformer adapted for 1D XRD signals.
+
+    Adapted from MOFTransformer's 3D ViT (https://github.com/hspark1212/MOFTransformer).
+    In EXIT, the transformer blocks in this class are NOT used for XRD alone — they are
+    shared with the MOFid stream. MultiModal.forward() calls self.vision_transformer()
+    only to get patch embeddings, then passes the concatenated [MOFid + XRD] sequence
+    through self.vision_transformer.blocks and self.vision_transformer.norm.
+
+    Reference: 'An Image Is Worth 16x16 Words' (Dosovitskiy et al., 2020)
     """
 
     def __init__(

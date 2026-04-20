@@ -1,0 +1,37 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
+
+# Checkpoints and large data files
+*.ckpt
+*.pkl
+*.npy
+*.dat
+
+# Logs
+logs_*/
+*.log
+
+# Test / temp scratch files (not part of the public release)
+test_*
+temp_*
+
+# Jupyter notebooks
+*.ipynb
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

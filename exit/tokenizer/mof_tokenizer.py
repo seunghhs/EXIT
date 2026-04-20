@@ -1,3 +1,17 @@
+"""
+MOFid tokenizer for EXIT.
+
+MOFid strings have the format: "<SMILES> && <topology_metadata>"
+    - SMILES part (before "&&"): tokenized using Schwaller et al. regex
+    - Metadata part (after "&&"): tokenized using longest-match vocabulary lookup
+      (dashes removed before matching to handle MOF topology naming conventions)
+
+Extends BertTokenizer so that HuggingFace's DataCollatorForLanguageModeling
+(padding, masking, etc.) works out of the box.
+
+Vocabulary: vocab_new.txt, ~4021 tokens including SMILES atoms, topology identifiers,
+metal nodes, and BERT special tokens ([CLS], [SEP], [PAD], [MASK], [UNK]).
+"""
 import collections
 import os
 import re
@@ -9,7 +23,10 @@ from logging import getLogger
 logger = getLogger(__name__)
 module_dir = os.path.dirname(__file__)
 vocab_path = module_dir + '/vocab_new.txt'
-SMI_REGEX_PATTERN = "(\[[^\]]+]|Br?|Cl?|N|O|S|P|F|I|b|c|n|o|s|p|\(|\)|\.|=|#|-|\+|\\|\/|:|~|@|\?|>>?|\*|\$|\%[0-9]+|[0-9])"
+
+# Schwaller et al. regex for SMILES tokenization (Molecular Transformer, ACS Central Science 2019)
+SMI_REGEX_PATTERN = r"(\[[^\]]+]|Br?|Cl?|N|O|S|P|F|I|b|c|n|o|s|p|\(|\)|\.|=|#|-|\+|\\|\/|:|~|@|\?|>>?|\*|\$|\%[0-9]+|[0-9])"
+
 
 class MOFTokenizer(BertTokenizer):
   def __init__(

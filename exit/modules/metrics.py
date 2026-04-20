@@ -1,3 +1,10 @@
+"""
+Custom TorchMetrics classes for distributed training.
+
+Accuracy: handles both multi-class (argmax) and binary (threshold 0.5) predictions.
+Scalar: running average of arbitrary scalar values across all steps in an epoch.
+These are attached dynamically to the Lightning module by set_metrics() in utils.py.
+"""
 import torch
 from torchmetrics import Metric
 

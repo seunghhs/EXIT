@@ -1,3 +1,8 @@
+"""
+Finetuning dataset for regression tasks (surface area or pore volume prediction).
+Loads experimental MOF data (xrd, regression label, mofid) from a pickle file.
+Used with DataCollatorForLanguageModeling(mlm=False) — no token masking applied.
+"""
 import os
 import pickle
 import numpy as np
@@ -5,17 +10,18 @@ import torch
 from torch.utils.data import Dataset
 from exit.tokenizer.mof_tokenizer import MOFTokenizer
 
-tokenizer = MOFTokenizer(model_max_length = 512, padding_side='right')
+tokenizer = MOFTokenizer(model_max_length=512, padding_side='right')
+
 
 class BasicDataset(Dataset):
-    def __init__(
-        self,
-        data_dir: str,
-    ):
+    def __init__(self, data_dir: str):
         """
-        Dataset for pretrained MOF.
         Args:
-            data_dir (str): where data_dir(.pkl) for xrd, sa (surface area), pv (pore volume), and mofid ; 
+            data_dir: path to .pkl file. Each item must have keys:
+                xrd        (np.ndarray, shape [seq_length])  — XRD pattern normalized to [0, 1]
+                regression (float)                           — SA [m²/g] or PV [cm³/g] label
+                mofid      (str)                             — MOFid string
+                name       (str), ref (str)                  — identifiers
         """
         super().__init__()
         self.data_dir = data_dir
@@ -68,34 +74,28 @@ class BasicDataset(Dataset):
 
 
 def custom_collate_fn(batch, data_collator):
-    # Extract only input_ids for each data item and pass them individually to data_collator
+    """
+    Collate function for finetuning. With mlm=False, data_collator passes input_ids through
+    unchanged and sets all labels to -100 (ignored in loss). Handles padding per-sample.
+    """
     for item in batch:
         input_ids_batch = {"input_ids": item["input_ids"], "attention_mask": item["attention_mask"]}
-
-        # DataCollatorForLanguageModeling only processes input_ids of each data item
         masked_batch = data_collator([input_ids_batch])
-
-        # Add masked input_ids, attention_mask, labels, etc. to the item
         item.update({key: value.squeeze(0) for key, value in masked_batch.items()})
 
-    # Check whether it is a tensor, treat tensors as stack, others as list
     def batch_stack_or_list(data_list):
         if isinstance(data_list[0], torch.Tensor):
             return torch.stack(data_list)
         else:
             return data_list
 
-    # Check if there are fields to merge and process them
     merged_batch = {}
     for key in batch[0].keys():
         data_list = [bat[key] for bat in batch]
-        
-        # 'input_ids', 'attention_mask', and 'labels' are processed unconditionally
         if key in ['input_ids', 'attention_mask', 'labels']:
             merged_batch[key] = batch_stack_or_list(data_list)
-        
         else:
-            if isinstance(data_list[0], (torch.Tensor, str, float, int)):  # check data type
+            if isinstance(data_list[0], (torch.Tensor, str, float, int)):
                 merged_batch[key] = batch_stack_or_list(data_list)
 
     return merged_batch

@@ -1,3 +1,13 @@
+"""
+Pretraining entry point for the EXIT (EXperimental XRD Integrated Transformer) model.
+
+Trains the MultiModal backbone on hypothetical MOFs (hMOF database) using simulated XRD
+patterns and MOFid strings. Active tasks are configured via loss_names in the YAML config
+(e.g., mofid MLM, void fraction regression, XRD reconstruction).
+
+Usage:
+    python pretrain.py --config config/pretrain.yml --devices 1 --epoch 100
+"""
 import os
 import yaml
 import torch
@@ -22,10 +32,12 @@ import datetime
 import pytorch_lightning as pl
 from pytorch_lightning.strategies import DDPStrategy
 
+# file_system sharing avoids "too many open files" error with large DataLoaders
 torch.multiprocessing.set_sharing_strategy("file_system")
-num_workers =16
+num_workers = 16
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["CUDA_LAUNCH_BLOCKING"]="1"
+# CUDA_LAUNCH_BLOCKING=1 makes CUDA errors synchronous, giving accurate stack traces
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 os.environ["MASTER_PORT"] = "12356"
 
 if __name__ == '__main__':
@@ -64,16 +76,15 @@ if __name__ == '__main__':
     os.makedirs(ckpt_dir, exist_ok=True)
 
     
+    # val/the_metric = weighted sum of task losses (lower is better for pretrain)
     checkpoint_callback = ModelCheckpoint(
-        dirpath = ckpt_dir, 
+        dirpath = ckpt_dir,
         verbose=True,
         save_last=True,
         save_top_k=1,
         monitor="val/the_metric",
-        #every_n_train_steps=10,
-        #every_n_epochs=1, 
         mode='min'
-    )    
+    )
     seed = config['seed']
     logger = pl.loggers.TensorBoardLogger(
         args.log_dir,
@@ -90,14 +101,16 @@ if __name__ == '__main__':
     
     num_nodes = config['num_nodes']
     
-    if args.devices==0:
+    # gradient accumulation keeps effective batch_size = config['batch_size']
+    # regardless of how many GPUs are used
+    if args.devices == 0:
         accumulate_grad_batches = config['batch_size'] // (
             config['per_gpu_batchsize'] * num_nodes
         )
     else:
         accumulate_grad_batches = config['batch_size'] // (
             config['per_gpu_batchsize'] * args.devices * num_nodes
-        )    
+        )
 
     
     log_every_n_steps=10
@@ -107,27 +120,26 @@ if __name__ == '__main__':
         model = MultiModal.load_from_checkpoint(config['resume_from'],  config=config, strict=False)
 
     trainer = Trainer(
-                    
-                      accelerator = args.accelerator,
-                      devices = args.devices,
-                      num_nodes = config['num_nodes'],
-                      max_epochs=args.epoch, 
-                      logger=logger,
-                      accumulate_grad_batches=accumulate_grad_batches,
-                      benchmark=True,
-                      strategy=DDPStrategy(find_unused_parameters=True),
-                      #resume_from_checkpoint= config.train.resume_from,
-                       log_every_n_steps=log_every_n_steps,
-                      callbacks=callbacks
-                     )   
-    
-    # pretrain 15% masking
-    tokenizer = MOFTokenizer(model_max_length = 512, padding_side='right')
+        accelerator=args.accelerator,
+        devices=args.devices,
+        num_nodes=config['num_nodes'],
+        max_epochs=args.epoch,
+        logger=logger,
+        accumulate_grad_batches=accumulate_grad_batches,
+        benchmark=True,
+        # find_unused_parameters=True required because not all task heads are active
+        strategy=DDPStrategy(find_unused_parameters=True),
+        log_every_n_steps=log_every_n_steps,
+        callbacks=callbacks
+    )
+
+    # 15% of MOFid tokens are randomly masked for the MLM pretraining objective
+    tokenizer = MOFTokenizer(model_max_length=512, padding_side='right')
     data_collator = DataCollatorForLanguageModeling(
         tokenizer=tokenizer,
         mlm=True,
-        mlm_probability=0.15  
-    )   
+        mlm_probability=0.15
+    )
     test_data = BasicDataset(test_data_dir)              
 
     test_loader =DataLoader(test_data, batch_size=config['per_gpu_batchsize'] ,collate_fn=lambda batch: custom_collate_fn(batch, data_collator),

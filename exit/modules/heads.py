@@ -1,3 +1,10 @@
+"""
+Task-specific prediction heads for EXIT.
+
+All heads receive features from the shared transformer output and produce
+task-specific logits. Active heads are instantiated dynamically in MultiModal.__init__
+based on the loss_names config.
+"""
 import torch.nn as nn
 
 from transformers.models.bert.modeling_bert import (
@@ -7,6 +14,8 @@ from transformers.models.bert.modeling_bert import (
 
 
 class Pooler(nn.Module):
+    """Extracts a single token (default: index 0 = CLS) and projects it through Linear+Tanh."""
+
     def __init__(self, hidden_size, index=0):
         super().__init__()
         self.dense = nn.Linear(hidden_size, hidden_size)
@@ -20,9 +29,7 @@ class Pooler(nn.Module):
         return pooled_output
 
 class VFHead(nn.Module):
-    """
-    head for Void Fraction
-    """
+    """Head for void fraction regression. Activated when loss_names.vf > 0."""
 
     def __init__(self, hid_dim, n_targets=1):
         super().__init__()
@@ -34,9 +41,7 @@ class VFHead(nn.Module):
 
 
 class SAHead(nn.Module):
-    """
-    head for Surface Area
-    """
+    """Head for surface area regression. Activated when loss_names.sa > 0."""
 
     def __init__(self, hid_dim, n_targets=1):
         super().__init__()
@@ -49,26 +54,27 @@ class SAHead(nn.Module):
 
 class MOFidHead(nn.Module):
     """
-    head for MOFid (Masked Patch Prediction)
+    Head for MOFid masked language modeling (MLM).
+
+    Uses BERT's BertPredictionHeadTransform (Linear → GELU → LayerNorm) before
+    the final projection to vocabulary logits. Applied only at masked token positions.
     """
     def __init__(self, hid_dim, ntoken):
         super().__init__()
-
-        bert_config = BertConfig(
-            hidden_size=hid_dim,
-        )
+        bert_config = BertConfig(hidden_size=hid_dim)
         self.transform = BertPredictionHeadTransform(bert_config)
-        self.decoder = nn.Linear(hid_dim, ntoken )  # bins
+        self.decoder = nn.Linear(hid_dim, ntoken)
 
-    def forward(self, x):  # [B, max_len, hid_dim]
+    def forward(self, x):  # x: [B, max_len, hid_dim]
         x = self.transform(x)  # [B, max_len, hid_dim]
-        x = self.decoder(x)  # [B, max_len, bins]
+        x = self.decoder(x)    # [B, max_len, ntoken]
         return x
 
 
 class RegressionHeadExp(nn.Module):
     """
-    head for Regression Experiments
+    2-layer MLP regression head (hid_dim → hid_dim//2 → 1).
+    Used when config['exp']=True; adds capacity over the linear RegressionHead.
     """
 
     def __init__(self, hid_dim, n_targets=1):
@@ -82,27 +88,26 @@ class RegressionHeadExp(nn.Module):
     def forward(self, x):
         return self.fc(x)
 
+
 class RegressionHead(nn.Module):
-    """
-    head for Regression
-    """
+    """Single linear regression head. Default head for SA/PV prediction."""
 
     def __init__(self, hid_dim, n_targets=1):
         super().__init__()
         self.fc = nn.Linear(hid_dim, n_targets)
 
     def forward(self, x):
-        x = self.fc(x)
-        return x
+        return self.fc(x)
+
 
 class ClassificationHead(nn.Module):
     """
-    head for Classification
+    Classification head supporting binary (BCE) and multi-class (CE) tasks.
+    Returns (logits, binary_flag) so the loss function knows which criterion to use.
     """
 
     def __init__(self, hid_dim, n_classes=2):
         super().__init__()
-
         if n_classes == 2:
             self.fc = nn.Linear(hid_dim, 1)
             self.binary = True
@@ -111,41 +116,22 @@ class ClassificationHead(nn.Module):
             self.binary = False
 
     def forward(self, x):
-        x = self.fc(x)
-
-        return x, self.binary
+        return self.fc(x), self.binary
 
 
 class XRDHead(nn.Module):
     """
-    head for XRD
+    XRD patch reconstruction head.
+    Projects each patch token back to the original patch values (size = patch_size).
+    Used as a self-supervised pretraining objective alongside MLM.
     """
 
     def __init__(self, hid_dim, n_target):
         super().__init__()
         self.fc = nn.Linear(hid_dim, n_target)
-        
-
 
     def forward(self, x):
-        x = self.fc(x)
-
-        return x
+        return self.fc(x)
 
 
-class CellHead(nn.Module):
-    """
-    head for Cell Parameters
-    """
-
-    def __init__(self, hid_dim, n_targets=6):
-        super().__init__()
-        self.fc = nn.Linear(hid_dim, n_targets)
-        
-
-
-    def forward(self, x):
-        x = self.fc(x)
-
-        return x
 

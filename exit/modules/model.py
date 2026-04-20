@@ -1,3 +1,26 @@
+"""
+Core EXIT model: MultiModal PyTorch Lightning module.
+
+Architecture overview:
+    Input:
+        xrd    : [B, 1, seq_length]  — normalized XRD pattern (2θ range 5–50°, step 0.01°)
+        mofid  : [B, seq_len]        — tokenized MOFid string (SMILES + topology metadata)
+
+    Encoders:
+        VisionTransformer1D  : XRD → patch embeddings  [B, num_patches+1, embed_dim]
+        MOFidEncoder         : MOFid tokens → embeddings [B, seq_len, d_model]
+
+    Fusion:
+        Concatenate MOFid and XRD embeddings with token-type embeddings (0=MOFid, 1=XRD),
+        then pass through shared transformer blocks (from VisionTransformer1D.blocks).
+
+    Task heads (activated by loss_names in config):
+        regression       : SA or PV prediction from CLS token
+        mofid            : masked language modeling (MLM) on MOFid tokens
+        xrd              : XRD patch reconstruction
+        vf               : void fraction regression
+        classification   : binary or multi-class classification
+"""
 from typing import Any, List
 import torch
 import numpy as np
@@ -7,18 +30,27 @@ from pytorch_lightning import LightningModule
 
 from exit.modules import heads
 from exit.modules.visiontransformer import VisionTransformer1D
-from exit.modules.mofidtransformer import  MOFidEncoder
+from exit.modules.mofidtransformer import MOFidEncoder
 from exit.modules.utils import Normalizer, init_weights
-from exit.modules.utils import compute_vf_loss, compute_sa_loss,compute_regression_loss, compute_classification_loss, compute_mofid_loss, compute_xrd_loss
+from exit.modules.utils import compute_vf_loss, compute_regression_loss, compute_classification_loss, compute_mofid_loss, compute_xrd_loss
 from exit.modules.utils import epoch_wrapup, set_schedule, set_metrics
-
-
 
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error, accuracy_score
 
 
 class MultiModal(LightningModule):
     def __init__(self, config):
+        """
+        Args:
+            config (dict): YAML config dict. Required keys:
+                model: seq_length, patch_size, in_chans, embed_dim, hidden_dim,
+                       ntoken, d_model, nhead, d_hid, nlayers
+                loss_names: dict of task_name -> weight (0 = disabled)
+                regression_mean/std: normalization stats for regression target
+                visualize, seed, per_gpu_batchsize, batch_size,
+                learning_rate, weight_decay, optim_type, decay_power,
+                warmup_steps, end_lr, lr_mult, num_nodes
+        """
         super().__init__()
         self.save_hyperparameters()
         self.name = config.get('name', 'exit')
@@ -28,8 +60,8 @@ class MultiModal(LightningModule):
         self.exclude_keys = ['xrd', 'ref', 'name']
         self.current_tasks = []
         self.write_log = True
-        self.vis = False
-        self.xrd_mask = False
+        self.vis = False       # set True externally to collect attention weights
+        self.xrd_mask = False  # True when xrd reconstruction task is active
 
         
         # ===================== loss =====================
@@ -129,12 +161,24 @@ class MultiModal(LightningModule):
 
     
     def forward(self, batch):
+        """
+        Returns:
+            dict with keys:
+                cls_feats      : [B, hidden_dim]  — pooled CLS representation
+                mofid_feats    : [B, mofid_len, hidden_dim]
+                xrd_feats      : [B, num_patches+1, hidden_dim]
+                mofid_masks    : [B, mofid_len]  — True at masked positions
+                xrd_patches    : [B, num_patches, patch_size]  — original XRD patches
+                xrd_masks      : [B, num_patches, patch_size]  — -100 at masked positions
+                attn_weights   : list of [num_layers, B, heads, L, L] if self.vis else []
+                + all batch fields except 'xrd', 'ref', 'name'
+        """
         B = len(batch['xrd'].to(self.device))
-        
-        #mofid encoding
-        mofid_embeds,  mofid_labels = batch['input_ids'].to(self.device), batch['labels'].to(self.device)
+
+        # MOFid encoding
+        mofid_embeds, mofid_labels = batch['input_ids'].to(self.device), batch['labels'].to(self.device)
         mofid_attention_masks = batch['attention_mask'].to(self.device)
-        mofid_masks = mofid_labels != -100
+        mofid_masks = mofid_labels != -100  # True at positions that were masked (MLM targets)
         mofid_embeds = self.mofid_encoder(mofid_embeds)
         
         
@@ -150,37 +194,36 @@ class MultiModal(LightningModule):
         # mofid_labels = torch.cat([cls_tokens[:,None], mofid_labels], dim=1)
         
         
-        # vision transformer encoding (xrd)
-        xrd_embeds, xrd_labels, xrd_masks = self.vision_transformer(batch['xrd'].float().to(self.device) )
-        
-        # add token_type_embedding (mofid ->0, xrd->1)
+        # XRD encoding: patchify → optionally mask patches → embed
+        xrd_embeds, xrd_labels, xrd_masks = self.vision_transformer(batch['xrd'].float().to(self.device))
+
+        # Token-type embeddings distinguish modalities in the shared transformer
+        # (0 = MOFid tokens, 1 = XRD patch tokens)
         mofid_embeds = mofid_embeds + self.token_type_embeddings(
             torch.zeros_like(mofid_attention_masks, device=self.device).long()
         )
-        
         xrd_embeds = xrd_embeds + self.token_type_embeddings(
             torch.ones(xrd_embeds.shape[:2], device=self.device).long()
-        )        
+        )
         xrd_attention_masks = torch.ones(xrd_embeds.shape[:2], device=self.device)
 
-
-        
+        # Concatenate MOFid and XRD token sequences for joint processing
         x = torch.cat([mofid_embeds, xrd_embeds], dim=1)
         x_masks = torch.cat([mofid_attention_masks, xrd_attention_masks], dim=1)
-        
-        # transformer blocks
+
+        # Shared transformer blocks (reuse VisionTransformer1D.blocks for both modalities)
         attn_weights = []
-        for i, blk in enumerate(self.vision_transformer.blocks):
+        for blk in self.vision_transformer.blocks:
             x, _attn = blk(x, mask=x_masks)
-        
             if self.vis:
                 attn_weights.append(_attn)
 
         if self.vis and len(attn_weights) > 0:
-            # [num_layers, B, heads, L, L]
+            # Stack to [num_layers, B, heads, L, L] for attention rollout analysis
             attn_weights = torch.stack(attn_weights, dim=0).detach().cpu()
-        
+
         x = self.vision_transformer.norm(x)
+        # CLS feature: pooler takes the first token (index=0) across the full concatenated sequence
         cls_feats = self.pooler(x)
         
         mofid_feats, xrd_feats = (
@@ -219,11 +262,6 @@ class MultiModal(LightningModule):
         if 'vf' in self.current_tasks:
             vf_normalizer = Normalizer(self.vf_mean, self.vf_std, self.device)
             losses.update(compute_vf_loss(self, results, vf_normalizer))
-
-        if 'sa' in self.current_tasks:
-            sa_normalizer = Normalizer(self.sa_mean, self.sa_std, self.device)
-            losses.update(compute_sa_loss(self, results, sa_normalizer))
-
 
         if 'mofid' in self.current_tasks:
             losses.update(compute_mofid_loss(self, results))
@@ -401,7 +439,7 @@ class MultiModal(LightningModule):
         self.write_log = True
 
     def lr_scheduler_step(self, scheduler, *args):
-        #print(f"Calling scheduler.step() at epoch {self.current_epoch}, step {self.global_step}")
+        # PL 2.0 changed the scheduler.step() signature; this handles both versions
         if len(args) == 2:
             optimizer_idx, metric = args
         elif len(args) == 1:
