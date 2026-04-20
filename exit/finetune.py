@@ -156,10 +156,16 @@ if __name__ == '__main__':
                              shuffle=False) 
     
     if args.is_test:
-        best_ckpt_list =  glob(os.path.join(ckpt_dir, '*.ckpt'))
-        best_ckpt = [ ckpt for ckpt in best_ckpt_list if os.path.basename(ckpt).startswith('epoch') ][0]
+        if config.get('test_ckpt_path'):
+            best_ckpt = config['test_ckpt_path']
+        else:
+            best_ckpt_list = glob(os.path.join(ckpt_dir, '*.ckpt'))
+            best_ckpt_list = [ckpt for ckpt in best_ckpt_list
+                              if os.path.basename(ckpt).startswith('epoch') or
+                                 os.path.basename(ckpt).startswith('best')]
+            best_ckpt = best_ckpt_list[0]
         print(f'best_ckpt: ', best_ckpt)
-        model = MultiModal.load_from_checkpoint(best_ckpt, config=config, strict=False)          
+        model = MultiModal.load_from_checkpoint(best_ckpt, config=config, strict=False)
         trainer.test(model, test_loader)
 
 
