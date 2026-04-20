@@ -38,6 +38,7 @@ import datetime
 import pytorch_lightning as pl
 from pytorch_lightning.strategies import DDPStrategy
 
+torch.set_float32_matmul_precision('high')
 torch.multiprocessing.set_sharing_strategy("file_system")
 num_workers = 16
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -81,7 +82,7 @@ if __name__ == '__main__':
         config['dataset']['test_data_dir'] = test_data_dir
 
     # ckpt 
-    ckpt_dir = f'./ckpt_{args.ckpt_dir}/' #{datetime.datetime.now().strftime("%Y-%m-%d")}
+    ckpt_dir = f'{args.ckpt_dir}/' #{datetime.datetime.now().strftime("%Y-%m-%d")}
     os.makedirs(ckpt_dir, exist_ok=True)
     # val/the_metric_2 = negated MAE (higher is better), defined in epoch_wrapup()
     checkpoint_callback = ModelCheckpoint(
@@ -99,9 +100,9 @@ if __name__ == '__main__':
     )        
 
     lr_callback = pl.callbacks.LearningRateMonitor(logging_interval="step")
-    early_callback = EarlyStopping(monitor="val/the_metric_2", mode="max",patience=5,)
-    
-    callbacks = [checkpoint_callback, lr_callback, early_callback]
+    # early_callback = EarlyStopping(monitor="val/the_metric_2", mode="max", patience=5)
+
+    callbacks = [checkpoint_callback, lr_callback]
     
     
 
