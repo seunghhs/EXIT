@@ -11,9 +11,9 @@ model:
     hidden_dim: 768
     ntoken: 3621
     d_model: 768
-    nhead: 8
+    nhead: 12
     d_hid: 512
-    nlayers: 6
+    nlayers: 12
 
 
 loss_names:
